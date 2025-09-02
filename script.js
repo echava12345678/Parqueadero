@@ -1,77 +1,12 @@
-// Archivo de script principal para la aplicación de gestión de parqueaderos.
-// Este script maneja la lógica de la interfaz de usuario, la interacción con Firebase
-// para el almacenamiento de datos, y la generación de recibos en formato PDF.
-
-// Importación de las librerías necesarias desde Firebase y jsPDF.
-// jsPDF se importa desde la ventana global ya que se carga en el HTML.
 const { jsPDF } = window.jspdf;
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
-import { getFirestore, collection, addDoc, getDocs, query, where, deleteDoc, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
-
-//----------------------------------------------------------------------------------------------------
-// NUEVA FUNCIONALIDAD: CONFIGURACIÓN Y AUTENTICACIÓN DE FIREBASE
-//----------------------------------------------------------------------------------------------------
-
-// Variables globales para la configuración y el estado de Firebase.
-// `__app_id` y `__firebase_config` son variables proporcionadas por el entorno de ejecución.
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-let app, db, auth;
-let userId;
-let currentPrices = []; // Almacena las tarifas actuales para un acceso rápido.
+import { collection, addDoc, getDocs, query, where, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // Definición de funciones de utilidad al inicio del script para su uso global.
-    // `formatNumber` formatea un número como moneda colombiana.
+    // Definición de la función de utilidad al inicio del script
     const formatNumber = (num) => new Intl.NumberFormat('es-CO').format(num);
-    // `parseNumber` elimina puntos y convierte la cadena a un número entero.
     const parseNumber = (str) => parseInt(str.replace(/\./g, '')) || 0;
 
-    // NUEVA FUNCIONALIDAD: Inicialización de la aplicación de Firebase.
-    // Se inicializan los servicios de Firestore y Auth.
-    if (Object.keys(firebaseConfig).length > 0) {
-        app = initializeApp(firebaseConfig);
-        db = getFirestore(app);
-        auth = getAuth(app);
-        console.log("Firebase inicializado con éxito.");
-        
-        // Manejar el estado de autenticación.
-        // Si hay un usuario, se muestra la aplicación principal. Si no, se intenta el login anónimo.
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                userId = user.uid;
-                loginSection.style.display = 'none';
-                mainApp.style.display = 'flex';
-                updateLoginMessage(user.email || 'Admin');
-                await fetchAndListenToPrices(); // Cargar precios al iniciar la sesión.
-                fetchActiveVehicles(); // Cargar vehículos activos.
-                console.log("Usuario autenticado:", userId);
-            } else {
-                try {
-                    console.log("No hay usuario autenticado. Intentando autenticación anónima...");
-                    if (typeof __initial_auth_token !== 'undefined') {
-                        await signInWithCustomToken(auth, __initial_auth_token);
-                    } else {
-                        await signInAnonymously(auth);
-                    }
-                    console.log("Autenticación anónima exitosa. Usuario:", auth.currentUser.uid);
-                } catch (error) {
-                    console.error("Error al autenticarse de forma anónima:", error);
-                    loginSection.style.display = 'flex';
-                    mainApp.style.display = 'none';
-                }
-            }
-        });
-    } else {
-        console.error("Configuración de Firebase no encontrada.");
-        // Ocultar la aplicación si Firebase no está configurado.
-        loginSection.style.display = 'flex';
-        mainApp.style.display = 'none';
-    }
-
-    // Definición de elementos del DOM.
-    // Se obtienen todas las referencias a los elementos HTML por su ID.
+    // Definición de elementos del DOM
     const loginSection = document.getElementById('login-section');
     const mainApp = document.getElementById('main-app');
     const loginForm = document.getElementById('login-form');
@@ -87,424 +22,693 @@ document.addEventListener('DOMContentLoaded', async () => {
     const savePricesBtn = document.getElementById('save-prices');
     const notificationArea = document.getElementById('notification-area');
     const loginMessage = document.getElementById('login-message');
-    const specialClientCheckbox = document.getElementById('special-client-checkbox');
-    const specialClientDetails = document.getElementById('special-client-details');
-    const adjustmentsInput = document.getElementById('adjustments');
-    const totalInput = document.getElementById('final-cost');
-    const adminPricesSection = document.getElementById('admin-prices');
-    const pricesList = document.getElementById('prices-list');
-    const newPriceBtn = document.getElementById('new-price-btn');
-    const editPricesSection = document.getElementById('edit-prices-section');
-    const vehicleTypeSelect = document.getElementById('vehicle-type-select');
-    const hourlyRateInput = document.getElementById('hourly-rate-input');
-    const dailyRateInput = document.getElementById('daily-rate-input');
-    const hourlyMinutesInput = document.getElementById('hourly-minutes-input');
-    const newRateBtn = document.getElementById('new-rate-btn');
-    const backToAdminBtn = document.getElementById('back-to-admin');
+    const specialClientCheckbox = document.getElementById('special-client');
+    const othersTypeContainer = document.getElementById('others-type-container');
+    const vehicleTypeEntry = document.getElementById('type-entry');
+    const othersVehicleSize = document.getElementById('others-vehicle-size');
+    const othersMonthlyPrice = document.getElementById('others-monthly-price');
+    const specialClientSection = document.getElementById('special-client-section');
+    const specialClientAdjustment = document.getElementById('special-client-adjustment');
+    const exitCostDisplay = document.getElementById('exit-cost-display');
+    const plateEntryInput = document.getElementById('plate-entry');
+    const plateLabel = document.getElementById('plate-label');
+    const otherPriceLabel = document.getElementById('other-price-label');
 
-    let receiptData = null; // Variable para almacenar los datos del recibo temporalmente.
 
-    //----------------------------------------------------------------------------------------------------
-    // FUNCIONES DE UTILIDAD PARA LA APLICACIÓN
-    //----------------------------------------------------------------------------------------------------
+    const vehicleSearchInput = document.getElementById('vehicle-search');
 
-    /**
-     * Muestra una notificación temporal en la interfaz de usuario.
-     * @param {string} message - El mensaje a mostrar.
-     * @param {string} type - El tipo de notificación ('info', 'success', 'error').
-     */
+    if(vehicleSearchInput) {
+        vehicleSearchInput.addEventListener('input', (e) => {
+            const searchTerm = e.target.value.trim().toUpperCase();
+            if (searchTerm === '') {
+                updateActiveVehiclesList('all');
+            } else {
+                const filteredVehicles = activeVehicles.filter(vehicle => 
+                    (vehicle.plate && vehicle.plate.toUpperCase().includes(searchTerm)) ||
+                    (vehicle.description && vehicle.description.toUpperCase().includes(searchTerm))
+                );
+                updateActiveVehiclesList('all', filteredVehicles);
+            }
+        });
+    }
+    // Tarifas iniciales con estructura completa
+    let prices = {
+        carro: {
+            mediaHora: 3000,
+            hora: 6000,
+            doceHoras: 30000,
+            mes: 250000
+        },
+        moto: {
+            mediaHora: 2000,
+            hora: 4000,
+            doceHoras: 15000,
+            mes: 150000 
+        },
+        'otros-mensualidad': {
+            'pequeño': { min: 100000, max: 150000, mes: 120000 },
+            'mediano': { min: 151000, max: 200000, mes: 180000 },
+            'grande': { min: 201000, max: 300000, mes: 250000 }
+        },
+        'otros-noche': {
+            'pequeño': { min: 10000, max: 15000, noche: 12000 },
+            'mediano': { min: 15100, max: 20000, noche: 18000 },
+            'grande': { min: 20100, max: 30000, noche: 25000 }
+        }
+    };
+
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                // Usuarios del sistema
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                const users = {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    'admin': 'admin123',
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    'trabajador': 'trabajador123'
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                };
+    
+    // Declaración de la variable para vehículos activos
+    let activeVehicles = [];
+
     const showNotification = (message, type = 'info') => {
         notificationArea.textContent = message;
-        notificationArea.className = `notification ${type}`;
+        notificationArea.className = `message ${type}-message`;
         notificationArea.style.display = 'block';
+        notificationArea.classList.add('fade-in');
         setTimeout(() => {
             notificationArea.style.display = 'none';
         }, 5000);
     };
 
-    /**
-     * Actualiza el mensaje de bienvenida en la interfaz de usuario.
-     * @param {string} message - El mensaje de bienvenida.
-     */
-    const updateLoginMessage = (message) => {
-        loginMessage.textContent = `Bienvenido, ${message}`;
-    };
-
-    // NUEVA FUNCIONALIDAD: Cargar y escuchar los precios en tiempo real desde Firestore.
-    // Esto asegura que la aplicación siempre tenga las tarifas más recientes.
-    const fetchAndListenToPrices = async () => {
-        if (!db) return;
-        try {
-            const pricesCol = collection(db, `artifacts/${appId}/public/data/precios`);
-            onSnapshot(pricesCol, (snapshot) => {
-                currentPrices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderPrices(currentPrices);
-                setupEntryFormOptions(currentPrices); // Actualiza las opciones del formulario.
-                console.log("Precios actualizados en tiempo real.");
-            });
-        } catch (e) {
-            console.error("Error fetching or listening to prices: ", e);
-            showNotification('Error al cargar precios.', 'error');
+   const updateActiveVehiclesList = (filterType = 'all', vehicleList = null) => {
+    activeVehiclesList.innerHTML = '';
+    const vehiclesToDisplay = vehicleList || activeVehicles.filter(v => {
+        if (filterType === 'all') return true;
+        if (filterType === 'mensualidad') {
+            return v.type.includes('mensualidad');
         }
-    };
-
-    // NUEVA FUNCIONALIDAD: Renderiza la lista de tarifas en la sección de administración.
-    const renderPrices = (prices) => {
-        pricesList.innerHTML = '';
-        if (prices.length === 0) {
-            pricesList.innerHTML = '<p class="text-center text-gray-500">No hay tarifas definidas.</p>';
-            return;
+        if (filterType === 'otros-noche') {
+            return v.type.includes('otros-noche');
         }
-        prices.forEach(price => {
+        return v.type === filterType;
+    });
+
+    if (vehiclesToDisplay.length === 0) {
+        activeVehiclesList.innerHTML = '<li><i class="fas fa-info-circle"></i> No hay vehículos activos de este tipo.</li>';
+    } else {
+        vehiclesToDisplay.forEach(v => {
             const li = document.createElement('li');
-            li.className = 'flex items-center justify-between p-2 mb-2 bg-gray-100 rounded-lg shadow-sm';
-            // Muestra la tarifa por minuto, y si es una tarifa fija de 12 horas, también la muestra.
-            li.innerHTML = `
-                <div class="flex-1">
-                    <span class="font-semibold text-gray-700">${price.tipoVehiculo}</span>
-                    <br>
-                    ${price.tarifaMinuto ? `<span class="text-sm text-gray-500">Tarifa por minuto: $${formatNumber(price.tarifaMinuto)} COP</span>` : ''}
-                    ${price.tarifaFija ? `<span class="text-sm text-gray-500">Tarifa fija por ${price.tiempoFijo}: $${formatNumber(price.tarifaFija)} COP</span>` : ''}
-                </div>
-                <button data-id="${price.id}" class="edit-price-btn bg-blue-500 text-white p-2 rounded-full hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors duration-200">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
-                    </svg>
-                </button>
-            `;
-            pricesList.appendChild(li);
-        });
-    };
-
-    // NUEVA FUNCIONALIDAD: Actualiza dinámicamente las opciones del formulario de entrada.
-    // Esto asegura que los nuevos tipos de vehículo se muestren correctamente.
-    const setupEntryFormOptions = (prices) => {
-        const entryVehicleSelect = document.getElementById('tipo-vehiculo-entrada');
-        entryVehicleSelect.innerHTML = ''; // Limpia las opciones existentes.
-
-        // Añade las opciones por defecto que siempre deben estar.
-        const defaultOptions = ['Carro', 'Moto'];
-        defaultOptions.forEach(type => {
-            if (!prices.some(p => p.tipoVehiculo === type)) {
-                // Solo agrega si no existe una tarifa definida para evitar duplicados.
-                const option = document.createElement('option');
-                option.value = type;
-                option.textContent = type;
-                entryVehicleSelect.appendChild(option);
+            let extraInfo = '';
+            let displayPlate = v.plate;
+            if (v.type.includes('mensualidad')) {
+                const entryDate = new Date(v.entryTime);
+                const nextPaymentDate = new Date(entryDate);
+                nextPaymentDate.setMonth(nextPaymentDate.getMonth() + 1);
+                extraInfo = `<br>Próximo pago: <strong>${nextPaymentDate.toLocaleDateString('es-CO')}</strong>`;
             }
-        });
-
-        // Añade las tarifas dinámicas (por minuto y tarifas fijas).
-        prices.forEach(price => {
-            const option = document.createElement('option');
-            option.value = price.tipoVehiculo;
-            if (price.tarifaMinuto) {
-                // Opción para tarifas por minuto.
-                option.textContent = price.tipoVehiculo;
-            } else if (price.tarifaFija) {
-                // Opción para tarifas fijas de 12 horas, mostrando el precio.
-                option.textContent = `${price.tipoVehiculo} (Tarifa Fija: $${formatNumber(price.tarifaFija)} COP)`;
+            if (v.type.includes('otros')) {
+                displayPlate = v.description;
             }
-            entryVehicleSelect.appendChild(option);
-        });
-    };
-
-    /**
-     * Muestra la lista de vehículos activos en la interfaz.
-     * @param {Array<Object>} vehicles - Un array de objetos de vehículo.
-     */
-    const renderActiveVehicles = (vehicles) => {
-        activeVehiclesList.innerHTML = '';
-        if (vehicles.length === 0) {
-            activeVehiclesList.innerHTML = '<p class="text-center text-gray-500">No hay vehículos activos.</p>';
-            return;
-        }
-        vehicles.forEach(vehicle => {
-            const li = document.createElement('li');
-            li.className = 'flex items-center justify-between p-2 mb-2 bg-gray-100 rounded-lg shadow-sm';
-            li.innerHTML = `
-                <div class="flex-1">
-                    <span class="font-semibold text-gray-700">${vehicle.placa}</span> - 
-                    <span class="text-sm text-gray-500">${vehicle.tipoVehiculo}</span>
-                    <br>
-                    <span class="text-xs text-gray-400">Hora de entrada: ${new Date(vehicle.horaEntrada).toLocaleString()}</span>
-                </div>
-                <button data-placa="${vehicle.placa}" class="exit-btn bg-red-500 text-white p-2 rounded-full hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors duration-200">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
-                    </svg>
-                </button>
-            `;
+            li.innerHTML = `<span>Placa/Descripción: <strong>${displayPlate}</strong></span> <span>Tipo: ${v.type}</span> <span>Entrada: ${new Date(v.entryTime).toLocaleString()}${extraInfo}</span>`;
             activeVehiclesList.appendChild(li);
         });
+    }
+};
+
+    // Cargar tarifas y vehículos desde localStorage (manteniendo el de precios en localStorage)
+    const loadData = async () => {
+        const storedPrices = localStorage.getItem('parkingPrices');
+        if (storedPrices) {
+            prices = JSON.parse(storedPrices);
+        }
+
+        // Cargar precios en los campos de administración
+        if (prices.carro) {
+            document.getElementById('car-half-hour').value = prices.carro.mediaHora;
+            document.getElementById('car-hour').value = prices.carro.hora;
+            document.getElementById('car-12h').value = prices.carro.doceHoras;
+            document.getElementById('car-month').value = prices.carro.mes;
+        }
+        if (prices.moto) {
+            document.getElementById('bike-half-hour').value = prices.moto.mediaHora;
+            document.getElementById('bike-hour').value = prices.moto.hora;
+            document.getElementById('bike-12h').value = prices.moto.doceHoras;
+            document.getElementById('bike-month').value = prices.moto.mes;
+        }
+        if (prices['otros-mensualidad']) {
+            document.getElementById('other-small-min').value = prices['otros-mensualidad'].pequeño.min;
+            document.getElementById('other-small-max').value = prices['otros-mensualidad'].pequeño.max;
+            document.getElementById('other-small-default').value = prices['otros-mensualidad'].pequeño.mes;
+            document.getElementById('other-medium-min').value = prices['otros-mensualidad'].mediano.min;
+            document.getElementById('other-medium-max').value = prices['otros-mensualidad'].mediano.max;
+            document.getElementById('other-medium-default').value = prices['otros-mensualidad'].mediano.mes;
+            document.getElementById('other-large-min').value = prices['otros-mensualidad'].grande.min;
+            document.getElementById('other-large-max').value = prices['otros-mensualidad'].grande.max;
+            document.getElementById('other-large-default').value = prices['otros-mensualidad'].grande.mes;
+        }
+        if (prices['otros-noche']) {
+            document.getElementById('other-night-small-min').value = prices['otros-noche'].pequeño.min;
+            document.getElementById('other-night-small-max').value = prices['otros-noche'].pequeño.max;
+            document.getElementById('other-night-small-default').value = prices['otros-noche'].pequeño.noche;
+            document.getElementById('other-night-medium-min').value = prices['otros-noche'].mediano.min;
+            document.getElementById('other-night-medium-max').value = prices['otros-noche'].mediano.max;
+            document.getElementById('other-night-medium-default').value = prices['otros-noche'].mediano.noche;
+            document.getElementById('other-night-large-min').value = prices['otros-noche'].grande.min;
+            document.getElementById('other-night-large-max').value = prices['otros-noche'].grande.max;
+            document.getElementById('other-night-large-default').value = prices['otros-noche'].grande.noche;
+        }
+        
+        // Cargar vehículos desde Firestore
+        const vehiclesCol = collection(window.db, 'activeVehicles');
+        const vehicleSnapshot = await getDocs(vehiclesCol);
+        activeVehicles = vehicleSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        updateActiveVehiclesList();
     };
-    
-    /**
-     * Carga la lista de vehículos activos desde Firestore y los muestra.
-     */
-    const fetchActiveVehicles = async () => {
-        if (!db || !userId) return;
-        try {
-            const vehiclesCollection = collection(db, `artifacts/${appId}/public/data/vehiculosActivos`);
-            const q = query(vehiclesCollection);
-            const querySnapshot = await getDocs(q);
-            const vehicleList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            renderActiveVehicles(vehicleList);
-        } catch (e) {
-            console.error("Error fetching active vehicles: ", e);
-            showNotification('Error al cargar vehículos activos.', 'error');
+
+    // Filtros de vehículos activos
+    document.querySelectorAll('.filter-button').forEach(button => {
+        button.addEventListener('click', () => {
+            document.querySelectorAll('.filter-button').forEach(btn => btn.classList.remove('active'));
+            button.classList.add('active');
+            const filterType = button.dataset.filter;
+            updateActiveVehiclesList(filterType);
+        });
+    });
+
+    // Manejo de pestañas
+    const tabButtons = document.querySelectorAll('.tab-button');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    tabButtons.forEach(button => {
+        button.addEventListener('click', () => {
+            tabButtons.forEach(btn => btn.classList.remove('active'));
+            tabContents.forEach(content => content.style.display = 'none');
+
+            button.classList.add('active');
+            const targetTabId = button.dataset.tab;
+            document.getElementById(targetTabId).style.display = 'block';
+            document.getElementById(targetTabId).classList.add('fade-in');
+
+            if (targetTabId === 'active-vehicles-tab') {
+                updateActiveVehiclesList('all');
+                document.querySelector('.filter-button[data-filter="all"]').classList.add('active');
+            }
+        });
+    });
+
+    // Funciones de Autenticación
+    const login = (username, password) => {
+        if (users[username] === password) {
+            localStorage.setItem('currentUser', username);
+            loginMessage.style.display = 'none';
+            showApp(username);
+        } else {
+            loginMessage.textContent = 'Usuario o contraseña incorrectos.';
+            loginMessage.className = 'message error-message fade-in';
+            loginMessage.style.display = 'block';
         }
     };
-    
-    /**
-     * Muestra el recibo en la interfaz de usuario.
-     * @param {Object} data - Los datos del recibo a mostrar.
-     */
-    const showReceipt = (data) => {
-        resultContent.innerHTML = `
-            <div class="space-y-4 text-gray-700">
-                <h3 class="text-lg font-bold text-center text-blue-600">Recibo de Salida</h3>
-                <div class="bg-gray-50 p-4 rounded-lg shadow-sm">
-                    <p><strong>Placa:</strong> ${data.placa}</p>
-                    <p><strong>Tipo de Vehículo:</strong> ${data.tipoVehiculo}</p>
-                    <p><strong>Hora de Entrada:</strong> ${new Date(data.horaEntrada).toLocaleString()}</p>
-                    <p><strong>Hora de Salida:</strong> ${new Date(data.horaSalida).toLocaleString()}</p>
-                    <p><strong>Tiempo de Estadía:</strong> ${data.tiempoEstadia}</p>
-                    ${data.ajusteEspecial !== 0 ? `<p><strong>Ajuste Especial:</strong> ${data.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(data.ajusteEspecial)} COP</p>` : ''}
-                </div>
-                <div class="bg-blue-100 p-4 rounded-lg shadow-inner">
-                    <h4 class="text-xl font-bold text-center text-blue-800">TOTAL A PAGAR: $${formatNumber(data.costoFinal)} COP</h4>
-                </div>
-            </div>
-        `;
-        resultDiv.classList.remove('hidden');
-        receiptData = data;
+
+    const showApp = (user) => {
+        loginSection.style.display = 'none';
+        mainApp.style.display = 'block';
+        btnLogin.style.display = 'none';
+        btnLogout.style.display = 'inline';
+
+        if (user === 'admin') {
+            adminTabButton.style.display = 'inline-flex';
+        } else {
+            adminTabButton.style.display = 'none';
+        }
+        document.querySelector('.tab-button[data-tab="entry-exit-tab"]').click();
+        updateActiveVehiclesList('all');
     };
 
-    //----------------------------------------------------------------------------------------------------
-    // MANEJADORES DE EVENTOS
-    //----------------------------------------------------------------------------------------------------
+    const logout = () => {
+        localStorage.removeItem('currentUser');
+        loginSection.style.display = 'block';
+        mainApp.style.display = 'none';
+        btnLogin.style.display = 'inline';
+        btnLogout.style.display = 'none';
+        resultDiv.style.display = 'none';
+        loginForm.reset();
+    };
 
-    // Manejador del formulario de login.
-    loginForm.addEventListener('submit', async (e) => {
+    // Manejadores de eventos
+    loginForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        const email = document.getElementById('email').value;
+        const username = document.getElementById('username').value;
         const password = document.getElementById('password').value;
-        if (!auth) {
-            showNotification('Error de conexión con la base de datos.', 'error');
-            return;
-        }
-        try {
-            await signInWithEmailAndPassword(auth, email, password);
-            showNotification('Login exitoso.', 'success');
-        } catch (error) {
-            console.error("Error de login:", error.message);
-            showNotification('Error de login. Por favor, revisa tus credenciales.', 'error');
+        login(username, password);
+    });
+
+    btnLogout.addEventListener('click', logout);
+    
+    const currentUser = localStorage.getItem('currentUser');
+    if (currentUser) {
+        showApp(currentUser);
+    } else {
+        loginSection.style.display = 'block';
+        mainApp.style.display = 'none';
+    }
+
+    // Guardar tarifas del administrador
+    savePricesBtn.addEventListener('click', () => {
+        
+        prices.carro = {
+            mediaHora: parseNumber(document.getElementById('car-half-hour').value),
+            hora: parseNumber(document.getElementById('car-hour').value),
+            doceHoras: parseNumber(document.getElementById('car-12h').value),
+            mes: parseNumber(document.getElementById('car-month').value)
+        };
+        
+        prices.moto = {
+            mediaHora: parseNumber(document.getElementById('bike-half-hour').value),
+            hora: parseNumber(document.getElementById('bike-hour').value),
+            doceHoras: parseNumber(document.getElementById('bike-12h').value),
+            mes: parseNumber(document.getElementById('bike-month').value)
+        };
+
+        prices['otros-mensualidad'] = {
+            'pequeño': { min: parseNumber(document.getElementById('other-small-min').value), max: parseNumber(document.getElementById('other-small-max').value), mes: parseNumber(document.getElementById('other-small-default').value) },
+            'mediano': { min: parseNumber(document.getElementById('other-medium-min').value), max: parseNumber(document.getElementById('other-medium-max').value), mes: parseNumber(document.getElementById('other-medium-default').value) },
+            'grande': { min: parseNumber(document.getElementById('other-large-min').value), max: parseNumber(document.getElementById('other-large-max').value), mes: parseNumber(document.getElementById('other-large-default').value) }
+        };
+        
+        prices['otros-noche'] = {
+            'pequeño': { min: parseNumber(document.getElementById('other-night-small-min').value), max: parseNumber(document.getElementById('other-night-small-max').value), noche: parseNumber(document.getElementById('other-night-small-default').value) },
+            'mediano': { min: parseNumber(document.getElementById('other-night-medium-min').value), max: parseNumber(document.getElementById('other-night-medium-max').value), noche: parseNumber(document.getElementById('other-night-medium-default').value) },
+            'grande': { min: parseNumber(document.getElementById('other-night-large-min').value), max: parseNumber(document.getElementById('other-night-large-max').value), noche: parseNumber(document.getElementById('other-night-large-default').value) }
+        };
+
+        localStorage.setItem('parkingPrices', JSON.stringify(prices));
+        showNotification('Tarifas actualizadas correctamente.', 'success');
+        
+        loadData();
+    });
+
+    // Mostrar/ocultar campos de otros vehículos y cambiar placeholder
+    vehicleTypeEntry.addEventListener('change', () => {
+        const selectedType = vehicleTypeEntry.value;
+        if (selectedType === 'otros-mensualidad' || selectedType === 'otros-noche') {
+            othersTypeContainer.style.display = 'flex';
+            plateLabel.textContent = "Descripción:";
+            plateEntryInput.placeholder = "Ej: Puesto de comida, Carro de helados";
+            if (selectedType === 'otros-mensualidad') {
+                otherPriceLabel.textContent = "Precio (Mensualidad):";
+                othersMonthlyPrice.placeholder = "Precio acordado";
+            } else {
+                otherPriceLabel.textContent = "Precio (Por Noche):";
+                othersMonthlyPrice.placeholder = "Precio acordado";
+            }
+        } else {
+            othersTypeContainer.style.display = 'none';
+            plateLabel.textContent = "Placa:";
+            plateEntryInput.placeholder = "Ej: ABC-123";
         }
     });
 
-    // Manejador del botón de logout.
-    btnLogout.addEventListener('click', async () => {
-        if (!auth) return;
-        try {
-            await signOut(auth);
-            showNotification('Sesión cerrada.', 'info');
-            loginSection.style.display = 'flex';
-            mainApp.style.display = 'none';
-        } catch (error) {
-            console.error("Error al cerrar sesión:", error.message);
-            showNotification('Error al cerrar sesión.', 'error');
-        }
-    });
-
-    // Manejador del formulario de registro de entrada.
+    // Registrar entrada de vehículo
     entryForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        if (!db) {
-            showNotification('Error de conexión con la base de datos.', 'error');
+        const plate = document.getElementById('plate-entry').value.trim().toUpperCase();
+        const type = document.getElementById('type-entry').value;
+
+        let description = '';
+        if (['otros-mensualidad', 'otros-noche'].includes(type)) {
+            description = plate;
+        }
+
+        // --- VERIFICA SI EL VEHÍCULO YA EXISTE EN FIRESTORE ---
+        const q = query(collection(window.db, 'activeVehicles'), where("plate", "==", plate));
+        const querySnapshot = await getDocs(q);
+        if (!querySnapshot.empty && !['otros-mensualidad', 'otros-noche'].includes(type)) {
+            showNotification(`¡La placa ${plate} ya se encuentra registrada!`, 'error');
             return;
         }
-        const placa = document.getElementById('placa-entrada').value.toUpperCase();
-        const tipoVehiculo = document.getElementById('tipo-vehiculo-entrada').value;
-        const horaEntrada = Date.now();
 
-        // NUEVA FUNCIONALIDAD: Guardar el vehículo activo en Firestore.
-        try {
-            const docRef = await addDoc(collection(db, `artifacts/${appId}/public/data/vehiculosActivos`), {
-                placa,
-                tipoVehiculo,
-                horaEntrada
-            });
-            showNotification('Vehículo registrado con éxito.', 'success');
-            entryForm.reset();
-            fetchActiveVehicles(); // Actualizar la lista de vehículos.
-        } catch (e) {
-            console.error("Error adding document: ", e);
-            showNotification('Error al registrar el vehículo.', 'error');
-        }
-    });
+        let otherVehicleSize = null;
+        let otherPrice = null;
 
-    // Manejador de clics en la lista de vehículos activos (botón de salida).
-    activeVehiclesList.addEventListener('click', async (e) => {
-        if (e.target.closest('.exit-btn')) {
-            const placa = e.target.closest('.exit-btn').dataset.placa;
-            document.getElementById('placa-salida').value = placa;
-            document.getElementById('salida-tab').click();
-            exitForm.scrollIntoView({ behavior: 'smooth' });
+        if (type === 'otros-mensualidad' || type === 'otros-noche') {
+            otherVehicleSize = othersVehicleSize.value;
+            const priceValue = othersMonthlyPrice.value;
+            if (!priceValue) {
+                showNotification("Por favor, ingrese un precio para el vehículo.", 'error');
+                return;
+            }
+            otherPrice = parseNumber(priceValue);
             
-            // NUEVA FUNCIONALIDAD: Buscar vehículo en Firestore para prellenar el formulario.
-            if (!db) return;
-            try {
-                const q = query(collection(db, `artifacts/${appId}/public/data/vehiculosActivos`), where("placa", "==", placa));
-                const querySnapshot = await getDocs(q);
-                if (!querySnapshot.empty) {
-                    const vehicleDoc = querySnapshot.docs[0];
-                    const vehicleData = vehicleDoc.data();
-                    document.getElementById('vehicle-type-exit').value = vehicleData.tipoVehiculo;
-                    document.getElementById('entry-time').textContent = new Date(vehicleData.horaEntrada).toLocaleString();
-                }
-            } catch (e) {
-                console.error("Error pre-filling exit form: ", e);
-                showNotification('Error al cargar datos del vehículo.', 'error');
+            const sizePrices = prices[type][otherVehicleSize];
+            if (otherPrice < sizePrices.min || otherPrice > sizePrices.max) {
+                showNotification(`El precio debe estar entre $${formatNumber(sizePrices.min)} y $${formatNumber(sizePrices.max)} COP.`, 'error');
+                return;
             }
         }
+
+        const newVehicle = {
+            plate,
+            description,
+            type,
+            entryTime: new Date().toISOString(),
+            price: otherPrice,
+            size: otherVehicleSize
+        };
+        
+        // --- AGREGA EL DOCUMENTO A LA COLECCIÓN 'activeVehicles' EN FIRESTORE ---
+        try {
+            const docRef = await addDoc(collection(window.db, 'activeVehicles'), newVehicle);
+            showNotification(`Entrada de ${type} con placa ${plate} registrada.`, 'success');
+            entryForm.reset();
+            othersTypeContainer.style.display = 'none';
+            await loadData();
+        } catch (e) {
+            console.error("Error al añadir documento: ", e);
+            showNotification("Error al registrar el vehículo. Por favor, intente de nuevo.", 'error');
+        }
     });
 
-    // Manejador del formulario de registro de salida.
+    // Controlar visibilidad de la sección de cliente especial
+    let currentCalculatedCost = 0;
+    document.getElementById('plate-exit').addEventListener('input', () => {
+        const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
+        const vehicle = activeVehicles.find(v => v.plate === plate);
+        if (vehicle && !['mensualidad', 'moto-mensualidad', 'otros-mensualidad', 'otros-noche'].includes(vehicle.type)) {
+            specialClientSection.style.display = 'flex';
+        } else {
+            specialClientSection.style.display = 'none';
+            specialClientCheckbox.checked = false;
+        }
+    });
+
+    // Calcular costo en tiempo real con ajustes de cliente especial
+    const updateCalculatedCost = () => {
+        const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
+        const vehicle = activeVehicles.find(v => v.plate === plate);
+        if (!vehicle || ['mensualidad', 'moto-mensualidad', 'otros-mensualidad', 'otros-noche'].includes(vehicle.type)) {
+            exitCostDisplay.innerHTML = '';
+            specialClientSection.style.display = 'none';
+            return;
+        }
+
+        const exitTime = new Date();
+        const entryTime = new Date(vehicle.entryTime);
+        const diffInMs = exitTime - entryTime;
+        const diffInMinutes = Math.round(diffInMs / (1000 * 60));
+
+        let totalCost = 0;
+        
+
+        if (diffInMinutes <= 30) {
+            totalCost = 0;
+        } else if (diffInMinutes > 30 && diffInMinute <= 60) {
+            totalCost = prices[vehicle.type].mediaHora;
+        } else {
+            const vehicleType = vehicle.type;
+            const pricePerHour = prices[vehicleType].hora;
+            const priceFor12Hours = prices[vehicleType].doceHoras;
+            
+            const totalHours = Math.ceil(diffInMinutes / 60);
+            totalCost = totalHours * pricePerHour;
+            
+            if (diffInMinutes >= 720) {
+                totalCost = priceFor12Hours;
+            }
+        }
+        
+        let originalCost = totalCost;
+
+        if (specialClientCheckbox.checked) {
+            const adjustmentValue = parseNumber(specialClientAdjustment.value) || 0;
+            totalCost = originalCost + adjustmentValue;
+            if (adjustmentValue < 0) {
+                showNotification(`Descuento de $${formatNumber(Math.abs(adjustmentValue))} COP aplicado.`, 'info');
+            } else if (adjustmentValue > 0) {
+                showNotification(`Aumento de $${formatNumber(adjustmentValue)} COP aplicado.`, 'info');
+            }
+        } else {
+            notificationArea.style.display = 'none';
+        }
+
+        currentCalculatedCost = totalCost;
+        exitCostDisplay.innerHTML = `Total a Pagar: <strong>$${formatNumber(totalCost)} COP</strong>`;
+    };
+
+    specialClientCheckbox.addEventListener('change', updateCalculatedCost);
+    specialClientAdjustment.addEventListener('input', updateCalculatedCost);
+
+    document.getElementById('plate-exit').addEventListener('input', updateCalculatedCost);
+
+    // Registrar salida y calcular costo
     exitForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        if (!db) {
-            showNotification('Error de conexión con la base de datos.', 'error');
+        const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
+        const vehicle = activeVehicles.find(v => v.plate === plate || v.description === plate);
+
+        if (!vehicle) {
+            showNotification('Placa/Descripción no encontrada. Por favor, verifique e intente de nuevo.', 'error');
             return;
         }
-        const placa = document.getElementById('placa-salida').value.toUpperCase();
-        const specialClient = specialClientCheckbox.checked;
-        const ajusteEspecial = specialClient ? parseNumber(adjustmentsInput.value) : 0;
-        const costoFinalManual = specialClient && totalInput.value ? parseNumber(totalInput.value) : null;
 
-        // NUEVA FUNCIONALIDAD: Buscar el vehículo y calcular el costo.
-        try {
-            const q = query(collection(db, `artifacts/${appId}/public/data/vehiculosActivos`), where("placa", "==", placa));
-            const querySnapshot = await getDocs(q);
-            if (querySnapshot.empty) {
-                showNotification('Vehículo no encontrado.', 'error');
-                return;
-            }
+        const exitTime = new Date();
+        const entryTime = new Date(vehicle.entryTime);
+        const diffInMs = exitTime - entryTime;
+        const diffInMinutes = Math.round(diffInMs / (1000 * 60));
+        
+        let totalCost = 0;
+        let originalCost = 0;
+        const isSpecialClient = specialClientCheckbox.checked;
+        const adjustmentValue = parseNumber(specialClientAdjustment.value) || 0;
 
-            const vehicleDoc = querySnapshot.docs[0];
-            const vehicleData = vehicleDoc.data();
-            const horaSalida = Date.now();
-            const tiempoEstadiaMs = horaSalida - vehicleData.horaEntrada;
-            const tiempoEstadiaMin = Math.ceil(tiempoEstadiaMs / (1000 * 60));
+        let resultHTML = '';
+        let receiptData = {};
+        let displayPlate = vehicle.plate;
+        if (vehicle.type.includes('otros')) {
+            displayPlate = vehicle.description;
+        }
 
-            const price = currentPrices.find(p => p.tipoVehiculo === vehicleData.tipoVehiculo);
-            if (!price) {
-                showNotification('Tarifa no encontrada para este tipo de vehículo.', 'error');
-                return;
-            }
 
-            let costoOriginal;
-            let tiempoEstadiaTexto;
-            
-            // NUEVA LÓGICA DE COBRO: Cobro por bloques de 30 minutos o por tarifa fija.
-            if (price.tarifaFija) {
-                // Si es una tarifa fija, el costo es el valor de la tarifa.
-                costoOriginal = price.tarifaFija;
-                tiempoEstadiaTexto = `${price.tiempoFijo}`;
+        if (['mensualidad', 'moto-mensualidad', 'otros-mensualidad'].includes(vehicle.type)) {
+            let monthlyPrice = 0;
+            if (vehicle.type === 'mensualidad') {
+                monthlyPrice = prices.carro.mes;
+            } else if (vehicle.type === 'moto-mensualidad') {
+                monthlyPrice = prices.moto.mes;
             } else {
-                // Lógica de cobro por bloques de 30 minutos.
-                const tarifaMediaHora = price.tarifaMinuto * 30;
-                if (tiempoEstadiaMin < 30) {
-                    costoOriginal = 0;
-                } else {
-                    const numBloques = Math.ceil(tiempoEstadiaMin / 30);
-                    costoOriginal = numBloques * tarifaMediaHora;
-                }
-                tiempoEstadiaTexto = `${Math.floor(tiempoEstadiaMin / 60)} horas, ${tiempoEstadiaMin % 60} minutos`;
+                monthlyPrice = vehicle.price;
             }
 
-            const costoFinal = costoFinalManual !== null ? costoFinalManual : (costoOriginal + ajusteEspecial);
+            const nextPaymentDate = new Date(vehicle.entryTime);
+            nextPaymentDate.setMonth(nextPaymentDate.getMonth() + 1);
 
-            const data = {
-                placa,
-                tipoVehiculo: vehicleData.tipoVehiculo,
-                horaEntrada: vehicleData.horaEntrada,
-                horaSalida,
-                tiempoEstadia: tiempoEstadiaTexto,
-                costoOriginal,
-                ajusteEspecial,
-                costoFinal,
-                esClienteEspecial: specialClient
+            resultHTML = `
+                <p>Placa/Descripción: <strong>${displayPlate}</strong></p>
+                <p>Tipo: <strong>${vehicle.type}</strong></p>
+                <p>Valor mensualidad: <strong>$${formatNumber(monthlyPrice)} COP</strong></p>
+                <p>Día de pago próximo: <strong>${nextPaymentDate.toLocaleDateString('es-CO')}</strong></p>
+                <p class="info-message"><strong>Salida registrada. No se aplica cargo por hora.</strong></p>
+            `;
+            totalCost = 0;
+            
+            receiptData = {
+                plate: displayPlate,
+                type: vehicle.type,
+                entryTime,
+                exitTime,
+                costoFinal: 0,
+                descuento: 0,
+                esMensualidad: true,
+                costoOriginal: monthlyPrice,
+                proximoPago: nextPaymentDate
+            };
+        } else if (vehicle.type === 'otros-noche') {
+            const nightPrice = vehicle.price;
+            resultHTML = `
+                <p>Descripción: <strong>${displayPlate}</strong></p>
+                <p>Tipo: <strong>${vehicle.type}</strong></p>
+                <p>Valor por noche: <strong>$${formatNumber(nightPrice)} COP</strong></p>
+                <p class="info-message"><strong>Salida registrada. Tarifa plana nocturna.</strong></p>
+            `;
+            totalCost = nightPrice;
+            
+            receiptData = {
+                plate: displayPlate,
+                type: vehicle.type,
+                entryTime,
+                exitTime,
+                costoFinal: totalCost,
+                esGratis: false,
+                esMensualidad: false,
+                esNoche: true,
+                costoOriginal: nightPrice
             };
 
-            showReceipt(data);
-            
-            // NUEVA FUNCIONALIDAD: Eliminar el vehículo de la base de datos de "vehiculosActivos".
-            await deleteDoc(doc(db, `artifacts/${appId}/public/data/vehiculosActivos`, vehicleDoc.id));
-            
-            // NUEVA FUNCIONALIDAD: Guardar el recibo en la base de datos de "recibos".
-            await addDoc(collection(db, `artifacts/${appId}/public/data/recibos`), data);
-            
-            showNotification('Recibo generado y guardado. Vehículo retirado.', 'success');
-            exitForm.reset();
-            specialClientCheckbox.checked = false;
-            specialClientDetails.classList.add('hidden');
-            totalInput.value = '';
-            adjustmentsInput.value = '';
-            resultDiv.classList.remove('hidden');
-            fetchActiveVehicles(); // Actualizar la lista después de la salida.
+        } else { // Carros y Motos por hora
+            if (diffInMinutes <= 30) {
+                totalCost = 0;
+                resultHTML = `
+                    <p>Placa: <strong>${vehicle.plate}</strong></p>
+                    <p>Tipo: <strong>${vehicle.type}</strong></p>
+                    <p>Tiempo de estadía: <strong>${diffInMinutes} minutos</strong></p>
+                    <p class="info-message">El vehículo no ha superado la media hora de estadía.</p>
+                    <p>Total a pagar: <strong>$0 COP</strong></p>
+                `;
+                
+                receiptData = {
+                    plate: vehicle.plate,
+                    type: vehicle.type,
+                    entryTime,
+                    exitTime,
+                    costoFinal: 0,
+                    descuento: 0,
+                    esGratis: true,
+                    tiempoEstadia: `${diffInMinutes} minutos`
+                };
+
+            } else {
+                const vehicleType = vehicle.type;
+
+                // Nuevo cálculo de costo: primero media hora, luego horas completas
+                if (diffInMinutes <= 60) {
+                    totalCost = prices[vehicleType].mediaHora;
+                } else {
+                    const totalHours = Math.ceil(diffInMinutes / 60);
+                    totalCost = totalHours * prices[vehicleType].hora;
+                }
+                
+                if (diffInMinutes >= 720) {
+                    totalCost = prices[vehicleType].doceHoras;
+                }
+                
+                originalCost = totalCost;
+                
+                if (isSpecialClient) {
+                    totalCost = originalCost + adjustmentValue;
+                }
+
+                const totalHoursDisplay = Math.floor(diffInMinutes / 60);
+                const totalMinutesDisplay = diffInMinutes % 60;
+
+                resultHTML = `
+                    <p>Placa: <strong>${vehicle.plate}</strong></p>
+                    <p>Tipo: <strong>${vehicle.type}</strong></p>
+                    <p>Tiempo de estadía: <strong>${totalHoursDisplay} horas y ${totalMinutesDisplay} minutos</strong></p>
+                    <p>Costo calculado (sin ajuste): <strong>$${formatNumber(originalCost)} COP</strong></p>
+                `;
+                
+                if (isSpecialClient) {
+                    resultHTML += `<p>Ajuste por cliente especial: <strong>${adjustmentValue >= 0 ? '+' : ''}$${formatNumber(adjustmentValue)} COP</strong></p>`;
+                }
+                
+                resultHTML += `<p>Total a pagar: <strong>$${formatNumber(totalCost)} COP</strong></p>`;
+
+                receiptData = {
+                    plate: vehicle.plate,
+                    type: vehicle.type,
+                    entryTime,
+                    exitTime,
+                    costoFinal: totalCost,
+                    descuento: adjustmentValue < 0 ? Math.abs(adjustmentValue) : 0,
+                    esGratis: false,
+                    esMensualidad: false,
+                    costoOriginal: originalCost,
+                    ajusteEspecial: adjustmentValue,
+                    tiempoEstadia: `${totalHoursDisplay} horas y ${totalMinutesDisplay} minutos`
+                };
+            }
+        }
+
+        resultContent.innerHTML = resultHTML;
+        resultDiv.style.display = 'block';
+        resultDiv.classList.add('fade-in');
+
+        // --- ELIMINA EL DOCUMENTO DE FIRESTORE ---
+        try {
+            await deleteDoc(doc(window.db, "activeVehicles", vehicle.id));
+            showNotification(`Salida de ${displayPlate} registrada.`, 'success');
+            await loadData(); // Recarga la lista de vehículos desde Firestore
         } catch (e) {
-            console.error("Error al procesar la salida:", e);
-            showNotification('Error al procesar la salida. Intenta de nuevo.', 'error');
+            console.error("Error al eliminar documento: ", e);
+            showNotification("Error al registrar la salida. Por favor, intente de nuevo.", 'error');
         }
+
+        exitForm.reset();
+        specialClientCheckbox.checked = false;
+        specialClientSection.style.display = 'none';
+        specialClientAdjustment.value = '';
+        exitCostDisplay.innerHTML = '';
+
+        localStorage.setItem('lastReceipt', JSON.stringify(receiptData));
     });
 
-    // Manejador del checkbox de cliente especial.
-    specialClientCheckbox.addEventListener('change', () => {
-        if (specialClientCheckbox.checked) {
-            specialClientDetails.classList.remove('hidden');
-        } else {
-            specialClientDetails.classList.add('hidden');
-        }
-    });
-
-    // Manejador del botón de imprimir recibo (PDF).
+    // Descargar recibo de pago en PDF
     printReceiptBtn.addEventListener('click', () => {
+        const receiptData = JSON.parse(localStorage.getItem('lastReceipt'));
         if (!receiptData) {
-            showNotification('No hay recibo para imprimir.', 'info');
+            showNotification('No hay un recibo para descargar. Finalice una salida primero.', 'info');
             return;
         }
 
         const doc = new jsPDF();
-        doc.setFontSize(18);
-        doc.setFont('helvetica', 'bold');
-        doc.text('Recibo de Parqueadero', 105, 20, null, null, 'center');
+        doc.setFont('helvetica');
+        doc.setTextColor(44, 62, 80);
+
+        doc.setFontSize(22);
+        doc.text('Parqueadero El Reloj', 105, 20, null, null, 'center');
+        doc.setFontSize(16);
+
+        if (receiptData.esGratis) {
+            doc.text('Salida Gratis', 105, 30, null, null, 'center');
+        } else {
+            doc.text('Recibo de Pago', 105, 30, null, null, 'center');
+        }
         
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(150);
-        doc.text(`ID: ${receiptData.id || 'N/A'}`, 105, 25, null, null, 'center');
-        
-        let y = 40;
+        doc.setDrawColor(200, 200, 200);
+        doc.line(20, 35, 190, 35);
+
+        let y = 45;
         doc.setFontSize(12);
-        doc.setTextColor(0);
-        doc.text(`Fecha: ${new Date(receiptData.horaSalida).toLocaleDateString()}`, 20, y);
-        y += 7;
-        doc.text(`Hora: ${new Date(receiptData.horaSalida).toLocaleTimeString()}`, 20, y);
+        doc.setTextColor(52, 73, 94);
+
+        if (receiptData.esNoche || receiptData.esMensualidad) {
+            doc.text(`Descripción: ${receiptData.plate}`, 20, y);
+            y += 7;
+        } else {
+            doc.text(`Placa: ${receiptData.plate}`, 20, y);
+            y += 7;
+        }
+        
+        doc.text(`Tipo de Vehículo: ${receiptData.type.replace('-', ' ').toUpperCase()}`, 20, y);
         y += 10;
-        doc.text(`Placa: ${receiptData.placa}`, 20, y);
+        doc.text(`Fecha de Entrada: ${new Date(receiptData.entryTime).toLocaleString('es-CO')}`, 20, y);
         y += 7;
-        doc.text(`Tipo de Vehículo: ${receiptData.tipoVehiculo}`, 20, y);
-        y += 7;
-        doc.text(`Hora de Entrada: ${new Date(receiptData.horaEntrada).toLocaleString()}`, 20, y);
-        y += 7;
-        doc.text(`Hora de Salida: ${new Date(receiptData.horaSalida).toLocaleString()}`, 20, y);
+        doc.text(`Fecha de Salida: ${new Date(receiptData.exitTime).toLocaleString('es-CO')}`, 20, y);
         y += 10;
         
-        if (receiptData.esClienteEspecial) {
+        if (receiptData.esGratis) {
             doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
+            y += 10;
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(231, 76, 60); 
+            doc.text('NO COMPLETÓ LA MEDIA HORA', 105, y, null, null, 'center');
             y += 7;
-            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
+            doc.text('SU SALIDA ES GRATIS', 105, y, null, null, 'center');
+            y += 10;
+            doc.setFontSize(16);
+            doc.text('TOTAL A PAGAR: $0 COP', 105, y, null, null, 'center');
+            y += 20;
+        } else if (receiptData.esMensualidad) {
+            doc.text(`Tipo de Servicio: Mensualidad`, 20, y);
+            y += 7;
+            doc.text(`Valor Mensualidad: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
+            y += 7;
+            doc.text(`Próximo Día de Pago: ${new Date(receiptData.proximoPago).toLocaleDateString('es-CO')}`, 20, y);
+            y += 10;
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(52, 152, 219);
+            doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
+            y += 20;
+        } else if (receiptData.esNoche) {
+             doc.text(`Tarifa Plana por Noche: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
             y += 10;
             doc.setFontSize(14);
             doc.setFont('helvetica', 'bold');
@@ -531,174 +735,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         doc.text('¡Gracias por su visita!', 105, y, null, null, 'center');
         y += 5;
         doc.text('Medellín, Antioquia, Colombia', 105, y, null, null, 'center');
-        
-        doc.save(`Recibo-${receiptData.placa}.pdf`);
+
+        doc.save(`Recibo_Parqueadero_${receiptData.plate}.pdf`);
+        showNotification('Recibo PDF generado con éxito.', 'success');
     });
 
-    // Manejador del botón de la pestaña de administración.
-    adminTabButton.addEventListener('click', async () => {
-        document.getElementById('admin-tab').classList.add('active-tab');
-        document.getElementById('operaciones-tab').classList.remove('active-tab');
-        document.getElementById('operaciones-content').classList.add('hidden');
-        document.getElementById('admin-content').classList.remove('hidden');
-
-        renderPrices(currentPrices);
-    });
-
-    // Manejador del botón de la pestaña de operaciones.
-    document.getElementById('operaciones-tab-button').addEventListener('click', () => {
-        document.getElementById('operaciones-tab').classList.add('active-tab');
-        document.getElementById('admin-tab').classList.remove('active-tab');
-        document.getElementById('admin-content').classList.add('hidden');
-        document.getElementById('operaciones-content').classList.remove('hidden');
-    });
-
-    // Manejador de la pestaña de salida.
-    document.getElementById('salida-tab').addEventListener('click', () => {
-        document.getElementById('salida-content').classList.remove('hidden');
-        document.getElementById('entrada-content').classList.add('hidden');
-    });
-
-    // Manejador de la pestaña de entrada.
-    document.getElementById('entrada-tab').addEventListener('click', () => {
-        document.getElementById('entrada-content').classList.remove('hidden');
-        document.getElementById('salida-content').classList.add('hidden');
-    });
-
-    // Manejador del botón para cerrar el recibo.
-    document.getElementById('close-result-btn').addEventListener('click', () => {
-        resultDiv.classList.add('hidden');
-        receiptData = null;
-    });
-
-    // Manejador del botón para crear una nueva tarifa.
-    newPriceBtn.addEventListener('click', async () => {
-        adminPricesSection.classList.add('hidden');
-        editPricesSection.classList.remove('hidden');
-        document.getElementById('edit-price-title').textContent = 'Crear Nueva Tarifa';
-        newRateBtn.textContent = 'Crear Tarifa';
-        newRateBtn.dataset.mode = 'new';
-        newRateBtn.dataset.id = '';
-        vehicleTypeSelect.value = 'Carro';
-        hourlyRateInput.value = '';
-        dailyRateInput.value = '';
-        hourlyMinutesInput.value = '';
-        vehicleTypeSelect.disabled = false;
-        
-        // NUEVA FUNCIONALIDAD: Llenar el select de tipos de vehículo con las opciones disponibles
-        vehicleTypeSelect.innerHTML = '';
-        const tiposVehiculoExistentes = currentPrices.map(p => p.tipoVehiculo);
-        const opcionesDefault = ['Carro', 'Moto', 'Carro (12 horas)', 'Moto (12 horas)'];
-        opcionesDefault.forEach(tipo => {
-            const option = document.createElement('option');
-            option.value = tipo;
-            option.textContent = tipo;
-            // Deshabilita los tipos de vehículo que ya tienen una tarifa
-            if (tiposVehiculoExistentes.includes(tipo)) {
-                 option.disabled = true;
-            }
-            vehicleTypeSelect.appendChild(option);
-        });
-
-    });
-
-    // Manejador de clics en la lista de precios para editar.
-    pricesList.addEventListener('click', (e) => {
-        if (e.target.closest('.edit-price-btn')) {
-            const id = e.target.closest('.edit-price-btn').dataset.id;
-            const priceToEdit = currentPrices.find(p => p.id === id);
-            if (priceToEdit) {
-                adminPricesSection.classList.add('hidden');
-                editPricesSection.classList.remove('hidden');
-                document.getElementById('edit-price-title').textContent = 'Editar Tarifa';
-                newRateBtn.textContent = 'Guardar Cambios';
-                newRateBtn.dataset.mode = 'edit';
-                newRateBtn.dataset.id = id;
-                vehicleTypeSelect.value = priceToEdit.tipoVehiculo;
-                
-                // Limpia los campos antes de asignar los valores
-                hourlyRateInput.value = '';
-                dailyRateInput.value = '';
-                hourlyMinutesInput.value = '';
-                
-                // Muestra los valores correctos dependiendo si es tarifa fija o por minuto
-                if (priceToEdit.tarifaMinuto) {
-                    hourlyRateInput.value = formatNumber(priceToEdit.tarifaMinuto * 60);
-                    dailyRateInput.value = formatNumber(priceToEdit.tarifaMinuto * 60 * 24);
-                    hourlyMinutesInput.value = priceToEdit.tarifaMinuto;
-                } else if (priceToEdit.tarifaFija) {
-                    // Para tarifas fijas, deshabilitamos la edición de los campos de tiempo
-                    hourlyRateInput.disabled = true;
-                    dailyRateInput.disabled = true;
-                    hourlyMinutesInput.disabled = true;
-                }
-                
-                vehicleTypeSelect.disabled = true;
-            }
-        }
-    });
-
-    // Manejador del botón para guardar nuevas tarifas o editar tarifas existentes.
-    newRateBtn.addEventListener('click', async () => {
-        const mode = newRateBtn.dataset.mode;
-        const id = newRateBtn.dataset.id;
-        const tipoVehiculo = vehicleTypeSelect.value;
-        const tarifaMinuto = parseNumber(hourlyMinutesInput.value);
-
-        // NUEVA FUNCIONALIDAD: Lógica para manejar las tarifas fijas de 12 horas.
-        let tarifaData;
-        if (tipoVehiculo.includes('(12 horas)')) {
-            const tarifaPorHora = currentPrices.find(p => p.tipoVehiculo === tipoVehiculo.split(' ')[0])?.tarifaMinuto * 60;
-            if (!tarifaPorHora) {
-                showNotification(`No se ha definido una tarifa por minuto para el tipo base: ${tipoVehiculo.split(' ')[0]}.`, 'error');
-                return;
-            }
-            tarifaData = { tipoVehiculo, tarifaFija: tarifaPorHora * 12, tiempoFijo: '12 horas' };
-        } else {
-            if (!tipoVehiculo || isNaN(tarifaMinuto) || tarifaMinuto <= 0) {
-                showNotification('Por favor, ingresa una tarifa válida.', 'error');
-                return;
-            }
-            tarifaData = { tipoVehiculo, tarifaMinuto };
-        }
-
-        if (!db) return;
-
-        try {
-            if (mode === 'new') {
-                await setDoc(doc(db, `artifacts/${appId}/public/data/precios`, tipoVehiculo), tarifaData);
-                showNotification('Tarifa creada con éxito.', 'success');
-            } else if (mode === 'edit' && id) {
-                await setDoc(doc(db, `artifacts/${appId}/public/data/precios`, id), tarifaData);
-                showNotification('Tarifa actualizada con éxito.', 'success');
-            }
-            editPricesSection.classList.add('hidden');
-            adminPricesSection.classList.remove('hidden');
-            // La lista se actualizará automáticamente gracias a onSnapshot.
-        } catch (e) {
-            console.error("Error saving price: ", e);
-            showNotification('Error al guardar la tarifa.', 'error');
-        }
-    });
-
-    // Manejador del botón para volver a la sección de administración de tarifas.
-    backToAdminBtn.addEventListener('click', () => {
-        editPricesSection.classList.add('hidden');
-        adminPricesSection.classList.remove('hidden');
-    });
-
-    // Manejador para el formato de los inputs de ajuste y costo final.
-    adjustmentsInput.addEventListener('input', () => {
-        adjustmentsInput.value = formatNumber(parseNumber(adjustmentsInput.value));
-    });
-
-    totalInput.addEventListener('input', () => {
-        totalInput.value = formatNumber(parseNumber(totalInput.value));
-    });
-
-    // Cargar vehículos y precios al inicio si hay un usuario autenticado.
-    if (auth && auth.currentUser) {
-        fetchActiveVehicles();
-        await fetchAndListenToPrices();
-    }
+    // Llamada inicial para cargar los datos y actualizar la lista de vehículos.
+    // Esto se hace al final para asegurar que todas las funciones ya estén definidas.
+    await loadData();
 });
