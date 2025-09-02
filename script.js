@@ -1,785 +1,704 @@
-/**
- * @fileoverview Lógica principal para la aplicación de gestión de parqueadero.
- * Este script maneja la autenticación, la gestión de vehículos activos y salientes,
- * la actualización de tarifas de forma dinámica y la generación de recibos en PDF.
- * Se conecta a Firestore para la persistencia de datos y garantiza una experiencia de usuario
- * fluida y en tiempo real.
- *
- * NOTA: Para el correcto funcionamiento en el entorno de Canvas, se utilizan variables
- * globales para la configuración de Firebase y el token de autenticación.
- * * Versión: 2.0
- */
+// Archivo de script principal para la aplicación de gestión de parqueaderos.
+// Este script maneja la lógica de la interfaz de usuario, la interacción con Firebase
+// para el almacenamiento de datos, y la generación de recibos en formato PDF.
 
-// Importaciones de Firebase, Auth y Firestore
-// Se asume que estas importaciones están disponibles a través de la etiqueta <script type="module">
-// en el archivo HTML principal y se exponen globalmente.
-
+// Importación de las librerías necesarias desde Firebase y jsPDF.
+// jsPDF se importa desde la ventana global ya que se carga en el HTML.
 const { jsPDF } = window.jspdf;
-
-// =====================================================================================================================
-// Definición de variables globales y elementos del DOM
-// =====================================================================================================================
-
-// Variables globales para la configuración de Firebase
-const db = window.db;
-const auth = window.auth;
-const appId = window.appId;
-const initialAuthToken = window.initialAuthToken;
-
-// Elementos del DOM
-const loginSection = document.getElementById('login-section');
-const mainApp = document.getElementById('main-app');
-const loginForm = document.getElementById('login-form');
-const btnLogin = document.getElementById('btn-login');
-const btnLogout = document.getElementById('btn-logout');
-const adminTabButton = document.getElementById('admin-tab-button');
-const entryForm = document.getElementById('entry-form');
-const exitForm = document.getElementById('exit-form');
-const resultDiv = document.getElementById('result');
-const resultContent = document.getElementById('result-content');
-const activeVehiclesList = document.getElementById('active-vehicles');
-const printReceiptBtn = document.getElementById('print-receipt');
-const savePricesBtn = document.getElementById('save-prices');
-const notificationArea = document.getElementById('notification-area');
-const loginMessage = document.getElementById('login-message');
-const specialClientCheckbox = document.getElementById('special-client');
-const specialClientSection = document.getElementById('special-client-section');
-const vehicleSearchInput = document.getElementById('vehicle-search');
-const tabs = document.querySelectorAll('.tab-button');
-const entryTypeSelect = document.getElementById('type-entry');
-const othersTypeContainer = document.getElementById('others-type-container');
-
-// Variables de estado de la aplicación
-let currentUser = null;
-let currentPrices = {};
-let activeVehicles = [];
-let filteredVehicles = [];
-
-// =====================================================================================================================
-// Funciones de utilidad
-// =====================================================================================================================
-
-/**
- * Formatea un número a formato de moneda colombiana.
- * @param {number} num El número a formatear.
- * @returns {string} El número formateado como string.
- */
-const formatNumber = (num) => new Intl.NumberFormat('es-CO').format(num);
-
-/**
- * Muestra una notificación temporal al usuario.
- * @param {string} message El mensaje a mostrar.
- * @param {string} type El tipo de notificación (success, error, warning).
- */
-const showNotification = (message, type = 'info') => {
-    notificationArea.textContent = message;
-    notificationArea.className = `message ${type}-message`;
-    notificationArea.style.display = 'block';
-    setTimeout(() => {
-        notificationArea.style.display = 'none';
-    }, 5000);
-};
-
-/**
- * Muestra u oculta un elemento del DOM.
- * @param {HTMLElement} element El elemento a manipular.
- * @param {boolean} show Si es `true`, muestra el elemento; si es `false`, lo oculta.
- */
-const toggleElementVisibility = (element, show) => {
-    element.style.display = show ? 'block' : 'none';
-};
-
-// =====================================================================================================================
-// Lógica de Autenticación y UI
-// =====================================================================================================================
-
-/**
- * Maneja el inicio de sesión del usuario.
- * Simula la autenticación y ajusta la UI en consecuencia.
- * @param {Event} e El evento de envío del formulario.
- */
-const handleLogin = async (e) => {
-    e.preventDefault();
-    const username = loginForm.username.value;
-    const password = loginForm.password.value;
-
-    if (username === 'admin' && password === 'admin') {
-        currentUser = { uid: 'admin-id', role: 'admin' };
-        showMainApp();
-    } else {
-        showNotification('Credenciales incorrectas.', 'error');
-        loginMessage.textContent = 'Credenciales incorrectas.';
-        loginMessage.style.display = 'block';
-    }
-};
-
-/**
- * Muestra la interfaz principal de la aplicación y oculta la de inicio de sesión.
- */
-const showMainApp = async () => {
-    toggleElementVisibility(loginSection, false);
-    toggleElementVisibility(mainApp, true);
-    toggleElementVisibility(btnLogin, false);
-    toggleElementVisibility(btnLogout, true);
-    loginMessage.style.display = 'none';
-
-    // Mostrar el panel de admin si el usuario es admin
-    if (currentUser && currentUser.role === 'admin') {
-        toggleElementVisibility(adminTabButton, true);
-        specialClientSection.style.display = 'block';
-        await loadAdminPrices();
-    } else {
-        toggleElementVisibility(adminTabButton, false);
-        specialClientSection.style.display = 'none';
-        await loadAdminPrices();
-    }
-
-    // Inicializa los listeners para las pestañas
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelector('.tab-button.active').classList.remove('active');
-            tab.classList.add('active');
-            document.querySelector('.tab-content.active-tab').classList.remove('active-tab');
-            document.querySelector('.tab-content.active-tab').style.display = 'none';
-            const targetTab = document.getElementById(tab.dataset.tab);
-            targetTab.classList.add('active-tab');
-            targetTab.style.display = 'block';
-        });
-    });
-};
-
-/**
- * Maneja el cierre de sesión del usuario.
- */
-const handleLogout = () => {
-    currentUser = null;
-    toggleElementVisibility(mainApp, false);
-    toggleElementVisibility(loginSection, true);
-    toggleElementVisibility(btnLogin, true);
-    toggleElementVisibility(btnLogout, false);
-    loginForm.reset();
-};
-
-// =====================================================================================================================
-// Lógica de Firestore
-// =====================================================================================================================
-
-/**
- * Obtiene la referencia a la colección de precios del admin.
- * @returns {FirestoreCollection} La referencia a la colección de precios.
- */
-const getPricesCollection = () => {
-    // La colección de precios del admin es pública para que la app pueda leerla sin autenticación avanzada
-    return collection(db, `artifacts/${appId}/public/data/admin_prices`);
-};
-
-/**
- * Obtiene la referencia a la colección de vehículos activos.
- * @returns {FirestoreCollection} La referencia a la colección de vehículos activos.
- */
-const getActiveVehiclesCollection = () => {
-    return collection(db, `artifacts/${appId}/public/data/active_vehicles`);
-};
-
-/**
- * Carga las tarifas del administrador desde Firestore.
- * Si no hay tarifas, guarda las predeterminadas.
- */
-const loadAdminPrices = async () => {
-    try {
-        const pricesColRef = getPricesCollection();
-        const pricesQuery = query(pricesColRef, where('documentId', '==', 'default-prices'));
-        const querySnapshot = await getDocs(pricesQuery);
-
-        if (querySnapshot.empty) {
-            console.log("No hay tarifas de administrador. Guardando tarifas predeterminadas.");
-            const defaultPrices = {
-                'car-half-hour': 3000,
-                'car-hour': 6000,
-                'bike-half-hour': 2000,
-                'bike-hour': 4000,
-                'car-12h': 30000,
-                'bike-12h': 15000,
-                'car-month': 250000,
-                'bike-month': 150000,
-                'other-small-min': 100000,
-                'other-small-max': 150000,
-                'other-small-default': 120000,
-                'other-medium-min': 151000,
-                'other-medium-max': 200000,
-                'other-medium-default': 180000,
-                'other-large-min': 201000,
-                'other-large-max': 300000,
-                'other-large-default': 250000,
-                'other-night-small-min': 10000,
-                'other-night-small-max': 15000,
-                'other-night-small-default': 12000,
-                'other-night-medium-min': 15100,
-                'other-night-medium-max': 20000,
-                'other-night-medium-default': 18000,
-                'other-night-large-min': 20100,
-                'other-night-large-max': 30000,
-                'other-night-large-default': 25000,
-                'documentId': 'default-prices'
-            };
-            await addDoc(pricesColRef, defaultPrices);
-            currentPrices = defaultPrices;
-        } else {
-            const pricesDoc = querySnapshot.docs[0];
-            currentPrices = pricesDoc.data();
-        }
-        updateAdminPanelInputs();
-        updateEntryFormOptions();
-    } catch (e) {
-        console.error("Error al cargar o guardar precios: ", e);
-        showNotification("Error al cargar las tarifas. Por favor, intente de nuevo más tarde.", "error");
-    }
-};
-
-/**
- * Actualiza los valores de los inputs del panel de administración con los precios cargados.
- */
-const updateAdminPanelInputs = () => {
-    for (const key in currentPrices) {
-        const input = document.getElementById(key);
-        if (input) {
-            input.value = currentPrices[key];
-        }
-    }
-};
-
-/**
- * Actualiza las opciones del formulario de entrada con los precios de 12 horas.
- */
-const updateEntryFormOptions = () => {
-    // Limpiamos las opciones dinámicas si existen
-    const dynamicOptions = entryTypeSelect.querySelectorAll('.dynamic-option');
-    dynamicOptions.forEach(opt => opt.remove());
-
-    // Obtenemos los precios de 12 horas del objeto de precios
-    const car12hPrice = currentPrices['car-12h'];
-    const bike12hPrice = currentPrices['bike-12h'];
-
-    // Agregamos las nuevas opciones con el valor concatenado
-    if (car12hPrice) {
-        const option = document.createElement('option');
-        option.value = 'carro-12h';
-        option.className = 'dynamic-option';
-        option.textContent = `Carro (por 12 horas) - $${formatNumber(car12hPrice)} COP`;
-        entryTypeSelect.add(option, entryTypeSelect.options[2]); // Inserta antes de mensualidad
-    }
-    if (bike12hPrice) {
-        const option = document.createElement('option');
-        option.value = 'moto-12h';
-        option.className = 'dynamic-option';
-        option.textContent = `Moto (por 12 horas) - $${formatNumber(bike12hPrice)} COP`;
-        entryTypeSelect.add(option, entryTypeSelect.options[4]); // Inserta antes de moto-mensualidad
-    }
-};
-
-/**
- * Guarda las tarifas del administrador en Firestore.
- * @param {Event} e El evento del clic.
- */
-const handleSavePrices = async (e) => {
-    e.preventDefault();
-    try {
-        const pricesColRef = getPricesCollection();
-        const pricesQuery = query(pricesColRef, where('documentId', '==', 'default-prices'));
-        const querySnapshot = await getDocs(pricesQuery);
-
-        if (querySnapshot.empty) {
-            showNotification('No se encontró el documento de precios para actualizar.', 'error');
-            return;
-        }
-        
-        const pricesDocRef = querySnapshot.docs[0].ref;
-        const updatedPrices = {};
-        const inputs = document.querySelectorAll('#admin-panel input');
-        inputs.forEach(input => {
-            updatedPrices[input.id] = parseInt(input.value, 10);
-        });
-
-        currentPrices = { ...currentPrices, ...updatedPrices };
-        await setDoc(pricesDocRef, currentPrices);
-        
-        updateEntryFormOptions();
-        showNotification('Tarifas actualizadas correctamente.', 'success');
-    } catch (e) {
-        console.error("Error al guardar precios: ", e);
-        showNotification("Error al guardar las tarifas.", "error");
-    }
-};
-
-/**
- * Escucha en tiempo real los cambios en la colección de vehículos activos.
- */
-const setupRealtimeListener = () => {
-    const activeVehiclesColRef = getActiveVehiclesCollection();
-    onSnapshot(activeVehiclesColRef, (querySnapshot) => {
-        activeVehicles = querySnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        displayActiveVehicles(activeVehicles);
-    }, (error) => {
-        console.error("Error al escuchar cambios en la colección de vehículos: ", error);
-        showNotification("Error de conexión con la base de datos.", "error");
-    });
-};
-
-// =====================================================================================================================
-// Lógica de Vehículos Activos
-// =====================================================================================================================
-
-/**
- * Muestra la lista de vehículos activos en el DOM.
- * @param {Array<Object>} vehicles La lista de vehículos a mostrar.
- */
-const displayActiveVehicles = (vehicles) => {
-    activeVehiclesList.innerHTML = '';
-    if (vehicles.length === 0) {
-        activeVehiclesList.innerHTML = '<li class="empty-list">No hay vehículos registrados.</li>';
-        return;
-    }
-    vehicles.forEach(vehicle => {
-        const li = document.createElement('li');
-        li.className = 'vehicle-item fade-in';
-        const formattedEntryTime = new Date(vehicle.entryTime).toLocaleString('es-CO');
-        li.innerHTML = `
-            <div class="vehicle-info">
-                <strong>Placa:</strong> ${vehicle.plate}
-                <span class="vehicle-type">${vehicle.type}</span>
-                <p><strong>Entrada:</strong> ${formattedEntryTime}</p>
-                <p><strong>Usuario ID:</strong> ${vehicle.userId}</p>
-            </div>
-            <button class="remove-vehicle-btn" data-id="${vehicle.id}"><i class="fas fa-trash-alt"></i></button>
-        `;
-        activeVehiclesList.appendChild(li);
-    });
-
-    // Agregar listener para el botón de eliminar
-    document.querySelectorAll('.remove-vehicle-btn').forEach(button => {
-        button.addEventListener('click', async (e) => {
-            const vehicleId = e.currentTarget.dataset.id;
-            const confirmed = window.confirm("¿Está seguro que desea eliminar este vehículo? Esto no generará un recibo.");
-            if (confirmed) {
-                await deleteVehicle(vehicleId);
-            }
-        });
-    });
-};
-
-/**
- * Filtra los vehículos activos según el tipo.
- * @param {string} filterType El tipo de vehículo para filtrar.
- */
-const filterVehicles = (filterType) => {
-    let filteredList = activeVehicles;
-    if (filterType !== 'all') {
-        filteredList = activeVehicles.filter(v => v.type === filterType);
-    }
-    displayActiveVehicles(filteredList);
-};
-
-/**
- * Busca vehículos por placa o descripción.
- * @param {string} searchTerm El término de búsqueda.
- */
-const searchVehicles = (searchTerm) => {
-    const normalizedTerm = searchTerm.toLowerCase();
-    const searchResults = activeVehicles.filter(v => 
-        v.plate.toLowerCase().includes(normalizedTerm) ||
-        v.type.toLowerCase().includes(normalizedTerm)
-    );
-    displayActiveVehicles(searchResults);
-};
-
-// =====================================================================================================================
-// Lógica de Registro de Entrada
-// =====================================================================================================================
-
-/**
- * Maneja el registro de entrada de un vehículo.
- * @param {Event} e El evento de envío del formulario.
- */
-const handleEntry = async (e) => {
-    e.preventDefault();
-    const plate = entryForm['plate-entry'].value.trim().toUpperCase();
-    const type = entryForm['type-entry'].value;
-    const entryTime = new Date().getTime();
-    
-    // Validar si la placa ya existe
-    const vehicleQuery = query(getActiveVehiclesCollection(), where("plate", "==", plate));
-    const querySnapshot = await getDocs(vehicleQuery);
-    if (!querySnapshot.empty) {
-        showNotification(`El vehículo con placa ${plate} ya está registrado.`, 'error');
-        return;
-    }
-
-    const newVehicle = {
-        plate,
-        type,
-        entryTime,
-        userId: currentUser ? currentUser.uid : 'sin-usuario'
-    };
-
-    if (type === 'otros-mensualidad' || type === 'otros-noche') {
-        newVehicle.size = othersTypeContainer.querySelector('#others-vehicle-size').value;
-        newVehicle.agreedPrice = parseFloat(othersTypeContainer.querySelector('#others-monthly-price').value);
-    }
-    
-    try {
-        await addDoc(getActiveVehiclesCollection(), newVehicle);
-        showNotification(`Entrada registrada para el vehículo ${plate}.`, 'success');
-        entryForm.reset();
-    } catch (error) {
-        console.error("Error al registrar entrada: ", error);
-        showNotification("Error al registrar entrada. Por favor, intente de nuevo.", 'error');
-    }
-};
-
-// =====================================================================================================================
-// Lógica de Cálculo de Costos y Salida
-// =====================================================================================================================
-
-/**
- * Calcula el costo de la estadía de un vehículo.
- * Implementa la lógica de cobro por media hora.
- * @param {Object} vehicle El objeto del vehículo.
- * @param {number} exitTime El tiempo de salida en milisegundos.
- * @returns {Object} Un objeto con el costo final, original y el tiempo de estadía.
- */
-const calculateCost = (vehicle, exitTime) => {
-    const durationMs = exitTime - vehicle.entryTime;
-    const durationMinutes = Math.ceil(durationMs / (1000 * 60));
-    const durationHours = durationMinutes / 60;
-    
-    let baseCost = 0;
-    let timeUnit = '';
-    let isFlatRate = false;
-
-    // Lógica para cobro por media hora (múltiplos de la tarifa de media hora)
-    const calculateHourlyCost = (halfHourPrice) => {
-        // Se cobra por cada bloque de 30 minutos o fracción.
-        // Math.ceil(durationMinutes / 30) nos da el número de bloques de 30 minutos a cobrar.
-        const halfHourBlocks = Math.ceil(durationMinutes / 30);
-        return halfHourPrice * halfHourBlocks;
-    };
-
-    switch (vehicle.type) {
-        case 'carro':
-            baseCost = calculateHourlyCost(currentPrices['car-half-hour']);
-            timeUnit = ' (Por Hora)';
-            break;
-        case 'moto':
-            baseCost = calculateHourlyCost(currentPrices['bike-half-hour']);
-            timeUnit = ' (Por Hora)';
-            break;
-        case 'carro-12h':
-            baseCost = currentPrices['car-12h'];
-            timeUnit = ' (Tarifa Plana 12h)';
-            isFlatRate = true;
-            break;
-        case 'moto-12h':
-            baseCost = currentPrices['bike-12h'];
-            timeUnit = ' (Tarifa Plana 12h)';
-            isFlatRate = true;
-            break;
-        case 'mensualidad':
-            baseCost = currentPrices['car-month'];
-            timeUnit = ' (Mensualidad)';
-            isFlatRate = true;
-            break;
-        case 'moto-mensualidad':
-            baseCost = currentPrices['bike-month'];
-            timeUnit = ' (Mensualidad)';
-            isFlatRate = true;
-            break;
-        case 'otros-mensualidad':
-            baseCost = vehicle.agreedPrice;
-            timeUnit = ` (Mensualidad - ${vehicle.size})`;
-            isFlatRate = true;
-            break;
-        case 'otros-noche':
-            baseCost = vehicle.agreedPrice;
-            timeUnit = ` (Por Noche - ${vehicle.size})`;
-            isFlatRate = true;
-            break;
-        default:
-            baseCost = 0;
-            timeUnit = '';
-            break;
-    }
-
-    const hours = Math.floor(durationHours);
-    const minutes = Math.floor(durationMinutes % 60);
-
-    const timeString = `${hours}h ${minutes}m`;
-    
-    return {
-        costoOriginal: baseCost,
-        tiempoEstadia: timeString,
-        isFlatRate: isFlatRate
-    };
-};
-
-/**
- * Maneja el registro de salida y cálculo de costos.
- * @param {Event} e El evento de envío del formulario.
- */
-const handleExit = async (e) => {
-    e.preventDefault();
-    const plate = exitForm['plate-exit'].value.trim().toUpperCase();
-    const specialClientAdjustment = parseFloat(exitForm['special-client-adjustment'].value) || 0;
-
-    try {
-        const vehiclesColRef = getActiveVehiclesCollection();
-        const vehicleQuery = query(vehiclesColRef, where("plate", "==", plate));
-        const querySnapshot = await getDocs(vehicleQuery);
-
-        if (querySnapshot.empty) {
-            showNotification(`No se encontró un vehículo con placa ${plate}.`, 'error');
-            return;
-        }
-
-        const vehicleDoc = querySnapshot.docs[0];
-        const vehicleData = vehicleDoc.data();
-        const exitTime = new Date().getTime();
-        
-        const costData = calculateCost(vehicleData, exitTime);
-        let finalCost = costData.costoOriginal;
-
-        if (specialClientCheckbox.checked) {
-            finalCost += specialClientAdjustment;
-        }
-
-        // Display results
-        const receiptData = {
-            plate: vehicleData.plate,
-            type: vehicleData.type,
-            entryTime: new Date(vehicleData.entryTime).toLocaleString('es-CO'),
-            exitTime: new Date(exitTime).toLocaleString('es-CO'),
-            tiempoEstadia: costData.tiempoEstadia,
-            costoOriginal: costData.costoOriginal,
-            ajusteEspecial: specialClientCheckbox.checked ? specialClientAdjustment : 0,
-            costoFinal: Math.max(0, finalCost),
-            isFlatRate: costData.isFlatRate
-        };
-
-        displayResult(receiptData);
-
-        // Almacenar los datos del recibo para el botón de impresión
-        printReceiptBtn.onclick = () => generatePDF(receiptData);
-        
-        // Eliminar el vehículo de la base de datos solo si el cálculo fue exitoso
-        await deleteDoc(doc(vehiclesColRef, vehicleDoc.id));
-        showNotification(`Salida procesada para el vehículo ${plate}.`, 'success');
-
-    } catch (error) {
-        console.error("Error al procesar la salida: ", error);
-        showNotification("Error al procesar la salida. Por favor, intente de nuevo.", 'error');
-    }
-};
-
-/**
- * Elimina un vehículo de la base de datos sin generar recibo.
- * @param {string} vehicleId El ID del documento del vehículo a eliminar.
- */
-const deleteVehicle = async (vehicleId) => {
-    try {
-        const vehiclesColRef = getActiveVehiclesCollection();
-        await deleteDoc(doc(vehiclesColRef, vehicleId));
-        showNotification("Vehículo eliminado correctamente.", "success");
-    } catch (error) {
-        console.error("Error al eliminar el vehículo: ", error);
-        showNotification("Error al eliminar el vehículo.", "error");
-    }
-};
-
-/**
- * Muestra los detalles de la salida en el DOM.
- * @param {Object} receiptData Los datos del recibo a mostrar.
- */
-const displayResult = (receiptData) => {
-    resultDiv.style.display = 'block';
-    const content = `
-        <p><strong>Placa:</strong> ${receiptData.plate}</p>
-        <p><strong>Tipo:</strong> ${receiptData.type}</p>
-        <p><strong>Entrada:</strong> ${receiptData.entryTime}</p>
-        <p><strong>Salida:</strong> ${receiptData.exitTime}</p>
-        <p><strong>Tiempo de Estadía:</strong> ${receiptData.tiempoEstadia}</p>
-        ${!receiptData.isFlatRate ? `<p><strong>Costo Original:</strong> $${formatNumber(receiptData.costoOriginal)} COP</p>` : ''}
-        ${receiptData.ajusteEspecial !== 0 ? `<p><strong>Ajuste Especial:</strong> ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP</p>` : ''}
-        <h3>TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP</h3>
-    `;
-    resultContent.innerHTML = content;
-};
-
-// =====================================================================================================================
-// Lógica de Generación de PDF
-// =====================================================================================================================
-
-/**
- * Genera un recibo en formato PDF.
- * @param {Object} receiptData Los datos para el recibo.
- */
-const generatePDF = (receiptData) => {
-    const doc = new jsPDF();
-    let y = 20;
-
-    // Título y logo
-    doc.setFontSize(20);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(41, 128, 185);
-    doc.text('Recibo de Parqueadero', 105, y, null, null, 'center');
-    y += 10;
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100, 100, 100);
-    doc.text('Parqueadero Villa_laundrycoffee', 105, y, null, null, 'center');
-    y += 5;
-    doc.text(`Fecha de Impresión: ${new Date().toLocaleDateString('es-CO')}`, 105, y, null, null, 'center');
-    y += 15;
-
-    // Información del vehículo
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(51, 51, 51);
-    doc.text('Información del Vehículo', 20, y);
-    y += 7;
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Placa: ${receiptData.plate}`, 20, y);
-    y += 7;
-    doc.text(`Tipo: ${receiptData.type}`, 20, y);
-    y += 10;
-
-    // Detalles de la estadía
-    doc.setFont('helvetica', 'bold');
-    doc.text('Detalles de la Estadía', 20, y);
-    y += 7;
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Entrada: ${receiptData.entryTime}`, 20, y);
-    y += 7;
-    doc.text(`Salida: ${receiptData.exitTime}`, 20, y);
-    y += 7;
-
-    // Resumen de costos
-    doc.setFont('helvetica', 'bold');
-    doc.text('Resumen de Costos', 20, y);
-    y += 7;
-
-    if (receiptData.isFlatRate) {
-        doc.setFont('helvetica', 'normal');
-        doc.text(`Tarifa Plana: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
-        y += 7;
-        doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
-        y += 7;
-        if (receiptData.ajusteEspecial !== 0) {
-            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
-            y += 7;
-        }
-        y += 5;
-    } else {
-        doc.setFont('helvetica', 'normal');
-        doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
-        y += 7;
-        doc.text(`Costo Original: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
-        y += 7;
-        if (receiptData.ajusteEspecial !== 0) {
-            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
-            y += 7;
-        }
-    }
-
-    // Costo total
-    y += 5;
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(52, 152, 219);
-    doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
-    y += 20;
-
-    // Pie de página
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100, 100, 100);
-    doc.text('¡Gracias por su visita!', 105, y, null, null, 'center');
-    y += 5;
-    doc.text('Medellín, Antioquia, Colombia', 105, y, null, null, 'center');
-
-    doc.save(`Recibo-${receiptData.plate}.pdf`);
-};
-
-// =====================================================================================================================
-// Eventos y Inicialización
-// =====================================================================================================================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
+import { getFirestore, collection, addDoc, getDocs, query, where, deleteDoc, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-auth.js";
+
+//----------------------------------------------------------------------------------------------------
+// NUEVA FUNCIONALIDAD: CONFIGURACIÓN Y AUTENTICACIÓN DE FIREBASE
+//----------------------------------------------------------------------------------------------------
+
+// Variables globales para la configuración y el estado de Firebase.
+// `__app_id` y `__firebase_config` son variables proporcionadas por el entorno de ejecución.
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+let app, db, auth;
+let userId;
+let currentPrices = []; // Almacena las tarifas actuales para un acceso rápido.
 
 document.addEventListener('DOMContentLoaded', async () => {
-    // Autenticación inicial del usuario
-    try {
-        if (initialAuthToken) {
-            await signInWithCustomToken(auth, initialAuthToken);
-            console.log("Autenticación con token inicial exitosa.");
-        } else {
-            await signInAnonymously(auth);
-            console.log("Autenticación anónima exitosa.");
-        }
-    } catch (error) {
-        console.error("Error en la autenticación: ", error);
-        showNotification("Error de autenticación. Algunas funciones pueden no estar disponibles.", "error");
-    }
+    // Definición de funciones de utilidad al inicio del script para su uso global.
+    // `formatNumber` formatea un número como moneda colombiana.
+    const formatNumber = (num) => new Intl.NumberFormat('es-CO').format(num);
+    // `parseNumber` elimina puntos y convierte la cadena a un número entero.
+    const parseNumber = (str) => parseInt(str.replace(/\./g, '')) || 0;
 
-    // Listener para los formularios
-    loginForm.addEventListener('submit', handleLogin);
-    entryForm.addEventListener('submit', handleEntry);
-    exitForm.addEventListener('submit', handleExit);
-    
-    // Listener para los botones de la barra de navegación
-    btnLogin.addEventListener('click', () => toggleElementVisibility(loginSection, true));
-    btnLogout.addEventListener('click', handleLogout);
-
-    // Listener para el cambio de tipo de vehículo en el formulario de entrada
-    entryTypeSelect.addEventListener('change', (e) => {
-        const value = e.target.value;
-        if (value === 'otros-mensualidad' || value === 'otros-noche') {
-            toggleElementVisibility(othersTypeContainer, true);
-        } else {
-            toggleElementVisibility(othersTypeContainer, false);
-        }
-    });
-
-    // Listener para el panel de administración
-    if (currentUser && currentUser.role === 'admin') {
-        savePricesBtn.addEventListener('click', handleSavePrices);
-    }
-    
-    // Listener para el filtro de vehículos
-    document.querySelectorAll('.filter-button').forEach(button => {
-        button.addEventListener('click', (e) => {
-            document.querySelector('.filter-button.active').classList.remove('active');
-            e.target.classList.add('active');
-            filterVehicles(e.target.dataset.filter);
+    // NUEVA FUNCIONALIDAD: Inicialización de la aplicación de Firebase.
+    // Se inicializan los servicios de Firestore y Auth.
+    if (Object.keys(firebaseConfig).length > 0) {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+        console.log("Firebase inicializado con éxito.");
+        
+        // Manejar el estado de autenticación.
+        // Si hay un usuario, se muestra la aplicación principal. Si no, se intenta el login anónimo.
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                loginSection.style.display = 'none';
+                mainApp.style.display = 'flex';
+                updateLoginMessage(user.email || 'Admin');
+                await fetchAndListenToPrices(); // Cargar precios al iniciar la sesión.
+                fetchActiveVehicles(); // Cargar vehículos activos.
+                console.log("Usuario autenticado:", userId);
+            } else {
+                try {
+                    console.log("No hay usuario autenticado. Intentando autenticación anónima...");
+                    if (typeof __initial_auth_token !== 'undefined') {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    console.log("Autenticación anónima exitosa. Usuario:", auth.currentUser.uid);
+                } catch (error) {
+                    console.error("Error al autenticarse de forma anónima:", error);
+                    loginSection.style.display = 'flex';
+                    mainApp.style.display = 'none';
+                }
+            }
         });
-    });
+    } else {
+        console.error("Configuración de Firebase no encontrada.");
+        // Ocultar la aplicación si Firebase no está configurado.
+        loginSection.style.display = 'flex';
+        mainApp.style.display = 'none';
+    }
 
-    // Listener para la búsqueda de vehículos
-    vehicleSearchInput.addEventListener('input', (e) => {
-        searchVehicles(e.target.value);
-    });
+    // Definición de elementos del DOM.
+    // Se obtienen todas las referencias a los elementos HTML por su ID.
+    const loginSection = document.getElementById('login-section');
+    const mainApp = document.getElementById('main-app');
+    const loginForm = document.getElementById('login-form');
+    const btnLogin = document.getElementById('btn-login');
+    const btnLogout = document.getElementById('btn-logout');
+    const adminTabButton = document.getElementById('admin-tab-button');
+    const entryForm = document.getElementById('entry-form');
+    const exitForm = document.getElementById('exit-form');
+    const resultDiv = document.getElementById('result');
+    const resultContent = document.getElementById('result-content');
+    const activeVehiclesList = document.getElementById('active-vehicles');
+    const printReceiptBtn = document.getElementById('print-receipt');
+    const savePricesBtn = document.getElementById('save-prices');
+    const notificationArea = document.getElementById('notification-area');
+    const loginMessage = document.getElementById('login-message');
+    const specialClientCheckbox = document.getElementById('special-client-checkbox');
+    const specialClientDetails = document.getElementById('special-client-details');
+    const adjustmentsInput = document.getElementById('adjustments');
+    const totalInput = document.getElementById('final-cost');
+    const adminPricesSection = document.getElementById('admin-prices');
+    const pricesList = document.getElementById('prices-list');
+    const newPriceBtn = document.getElementById('new-price-btn');
+    const editPricesSection = document.getElementById('edit-prices-section');
+    const vehicleTypeSelect = document.getElementById('vehicle-type-select');
+    const hourlyRateInput = document.getElementById('hourly-rate-input');
+    const dailyRateInput = document.getElementById('daily-rate-input');
+    const hourlyMinutesInput = document.getElementById('hourly-minutes-input');
+    const newRateBtn = document.getElementById('new-rate-btn');
+    const backToAdminBtn = document.getElementById('back-to-admin');
 
-    // Listener para el checkbox de cliente especial
-    specialClientCheckbox.addEventListener('change', () => {
-        const adjustmentInput = document.getElementById('special-client-adjustment');
-        if (specialClientCheckbox.checked) {
-            adjustmentInput.removeAttribute('disabled');
-        } else {
-            adjustmentInput.setAttribute('disabled', 'true');
-            adjustmentInput.value = 0;
+    let receiptData = null; // Variable para almacenar los datos del recibo temporalmente.
+
+    //----------------------------------------------------------------------------------------------------
+    // FUNCIONES DE UTILIDAD PARA LA APLICACIÓN
+    //----------------------------------------------------------------------------------------------------
+
+    /**
+     * Muestra una notificación temporal en la interfaz de usuario.
+     * @param {string} message - El mensaje a mostrar.
+     * @param {string} type - El tipo de notificación ('info', 'success', 'error').
+     */
+    const showNotification = (message, type = 'info') => {
+        notificationArea.textContent = message;
+        notificationArea.className = `notification ${type}`;
+        notificationArea.style.display = 'block';
+        setTimeout(() => {
+            notificationArea.style.display = 'none';
+        }, 5000);
+    };
+
+    /**
+     * Actualiza el mensaje de bienvenida en la interfaz de usuario.
+     * @param {string} message - El mensaje de bienvenida.
+     */
+    const updateLoginMessage = (message) => {
+        loginMessage.textContent = `Bienvenido, ${message}`;
+    };
+
+    // NUEVA FUNCIONALIDAD: Cargar y escuchar los precios en tiempo real desde Firestore.
+    // Esto asegura que la aplicación siempre tenga las tarifas más recientes.
+    const fetchAndListenToPrices = async () => {
+        if (!db) return;
+        try {
+            const pricesCol = collection(db, `artifacts/${appId}/public/data/precios`);
+            onSnapshot(pricesCol, (snapshot) => {
+                currentPrices = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderPrices(currentPrices);
+                setupEntryFormOptions(currentPrices); // Actualiza las opciones del formulario.
+                console.log("Precios actualizados en tiempo real.");
+            });
+        } catch (e) {
+            console.error("Error fetching or listening to prices: ", e);
+            showNotification('Error al cargar precios.', 'error');
+        }
+    };
+
+    // NUEVA FUNCIONALIDAD: Renderiza la lista de tarifas en la sección de administración.
+    const renderPrices = (prices) => {
+        pricesList.innerHTML = '';
+        if (prices.length === 0) {
+            pricesList.innerHTML = '<p class="text-center text-gray-500">No hay tarifas definidas.</p>';
+            return;
+        }
+        prices.forEach(price => {
+            const li = document.createElement('li');
+            li.className = 'flex items-center justify-between p-2 mb-2 bg-gray-100 rounded-lg shadow-sm';
+            // Muestra la tarifa por minuto, y si es una tarifa fija de 12 horas, también la muestra.
+            li.innerHTML = `
+                <div class="flex-1">
+                    <span class="font-semibold text-gray-700">${price.tipoVehiculo}</span>
+                    <br>
+                    ${price.tarifaMinuto ? `<span class="text-sm text-gray-500">Tarifa por minuto: $${formatNumber(price.tarifaMinuto)} COP</span>` : ''}
+                    ${price.tarifaFija ? `<span class="text-sm text-gray-500">Tarifa fija por ${price.tiempoFijo}: $${formatNumber(price.tarifaFija)} COP</span>` : ''}
+                </div>
+                <button data-id="${price.id}" class="edit-price-btn bg-blue-500 text-white p-2 rounded-full hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors duration-200">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
+                    </svg>
+                </button>
+            `;
+            pricesList.appendChild(li);
+        });
+    };
+
+    // NUEVA FUNCIONALIDAD: Actualiza dinámicamente las opciones del formulario de entrada.
+    // Esto asegura que los nuevos tipos de vehículo se muestren correctamente.
+    const setupEntryFormOptions = (prices) => {
+        const entryVehicleSelect = document.getElementById('tipo-vehiculo-entrada');
+        entryVehicleSelect.innerHTML = ''; // Limpia las opciones existentes.
+
+        // Añade las opciones por defecto que siempre deben estar.
+        const defaultOptions = ['Carro', 'Moto'];
+        defaultOptions.forEach(type => {
+            if (!prices.some(p => p.tipoVehiculo === type)) {
+                // Solo agrega si no existe una tarifa definida para evitar duplicados.
+                const option = document.createElement('option');
+                option.value = type;
+                option.textContent = type;
+                entryVehicleSelect.appendChild(option);
+            }
+        });
+
+        // Añade las tarifas dinámicas (por minuto y tarifas fijas).
+        prices.forEach(price => {
+            const option = document.createElement('option');
+            option.value = price.tipoVehiculo;
+            if (price.tarifaMinuto) {
+                // Opción para tarifas por minuto.
+                option.textContent = price.tipoVehiculo;
+            } else if (price.tarifaFija) {
+                // Opción para tarifas fijas de 12 horas, mostrando el precio.
+                option.textContent = `${price.tipoVehiculo} (Tarifa Fija: $${formatNumber(price.tarifaFija)} COP)`;
+            }
+            entryVehicleSelect.appendChild(option);
+        });
+    };
+
+    /**
+     * Muestra la lista de vehículos activos en la interfaz.
+     * @param {Array<Object>} vehicles - Un array de objetos de vehículo.
+     */
+    const renderActiveVehicles = (vehicles) => {
+        activeVehiclesList.innerHTML = '';
+        if (vehicles.length === 0) {
+            activeVehiclesList.innerHTML = '<p class="text-center text-gray-500">No hay vehículos activos.</p>';
+            return;
+        }
+        vehicles.forEach(vehicle => {
+            const li = document.createElement('li');
+            li.className = 'flex items-center justify-between p-2 mb-2 bg-gray-100 rounded-lg shadow-sm';
+            li.innerHTML = `
+                <div class="flex-1">
+                    <span class="font-semibold text-gray-700">${vehicle.placa}</span> - 
+                    <span class="text-sm text-gray-500">${vehicle.tipoVehiculo}</span>
+                    <br>
+                    <span class="text-xs text-gray-400">Hora de entrada: ${new Date(vehicle.horaEntrada).toLocaleString()}</span>
+                </div>
+                <button data-placa="${vehicle.placa}" class="exit-btn bg-red-500 text-white p-2 rounded-full hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors duration-200">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                    </svg>
+                </button>
+            `;
+            activeVehiclesList.appendChild(li);
+        });
+    };
+    
+    /**
+     * Carga la lista de vehículos activos desde Firestore y los muestra.
+     */
+    const fetchActiveVehicles = async () => {
+        if (!db || !userId) return;
+        try {
+            const vehiclesCollection = collection(db, `artifacts/${appId}/public/data/vehiculosActivos`);
+            const q = query(vehiclesCollection);
+            const querySnapshot = await getDocs(q);
+            const vehicleList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            renderActiveVehicles(vehicleList);
+        } catch (e) {
+            console.error("Error fetching active vehicles: ", e);
+            showNotification('Error al cargar vehículos activos.', 'error');
+        }
+    };
+    
+    /**
+     * Muestra el recibo en la interfaz de usuario.
+     * @param {Object} data - Los datos del recibo a mostrar.
+     */
+    const showReceipt = (data) => {
+        resultContent.innerHTML = `
+            <div class="space-y-4 text-gray-700">
+                <h3 class="text-lg font-bold text-center text-blue-600">Recibo de Salida</h3>
+                <div class="bg-gray-50 p-4 rounded-lg shadow-sm">
+                    <p><strong>Placa:</strong> ${data.placa}</p>
+                    <p><strong>Tipo de Vehículo:</strong> ${data.tipoVehiculo}</p>
+                    <p><strong>Hora de Entrada:</strong> ${new Date(data.horaEntrada).toLocaleString()}</p>
+                    <p><strong>Hora de Salida:</strong> ${new Date(data.horaSalida).toLocaleString()}</p>
+                    <p><strong>Tiempo de Estadía:</strong> ${data.tiempoEstadia}</p>
+                    ${data.ajusteEspecial !== 0 ? `<p><strong>Ajuste Especial:</strong> ${data.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(data.ajusteEspecial)} COP</p>` : ''}
+                </div>
+                <div class="bg-blue-100 p-4 rounded-lg shadow-inner">
+                    <h4 class="text-xl font-bold text-center text-blue-800">TOTAL A PAGAR: $${formatNumber(data.costoFinal)} COP</h4>
+                </div>
+            </div>
+        `;
+        resultDiv.classList.remove('hidden');
+        receiptData = data;
+    };
+
+    //----------------------------------------------------------------------------------------------------
+    // MANEJADORES DE EVENTOS
+    //----------------------------------------------------------------------------------------------------
+
+    // Manejador del formulario de login.
+    loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        if (!auth) {
+            showNotification('Error de conexión con la base de datos.', 'error');
+            return;
+        }
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+            showNotification('Login exitoso.', 'success');
+        } catch (error) {
+            console.error("Error de login:", error.message);
+            showNotification('Error de login. Por favor, revisa tus credenciales.', 'error');
         }
     });
 
-    // Carga inicial de precios y configuración de listener en tiempo real
-    await loadAdminPrices();
-    setupRealtimeListener();
+    // Manejador del botón de logout.
+    btnLogout.addEventListener('click', async () => {
+        if (!auth) return;
+        try {
+            await signOut(auth);
+            showNotification('Sesión cerrada.', 'info');
+            loginSection.style.display = 'flex';
+            mainApp.style.display = 'none';
+        } catch (error) {
+            console.error("Error al cerrar sesión:", error.message);
+            showNotification('Error al cerrar sesión.', 'error');
+        }
+    });
+
+    // Manejador del formulario de registro de entrada.
+    entryForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!db) {
+            showNotification('Error de conexión con la base de datos.', 'error');
+            return;
+        }
+        const placa = document.getElementById('placa-entrada').value.toUpperCase();
+        const tipoVehiculo = document.getElementById('tipo-vehiculo-entrada').value;
+        const horaEntrada = Date.now();
+
+        // NUEVA FUNCIONALIDAD: Guardar el vehículo activo en Firestore.
+        try {
+            const docRef = await addDoc(collection(db, `artifacts/${appId}/public/data/vehiculosActivos`), {
+                placa,
+                tipoVehiculo,
+                horaEntrada
+            });
+            showNotification('Vehículo registrado con éxito.', 'success');
+            entryForm.reset();
+            fetchActiveVehicles(); // Actualizar la lista de vehículos.
+        } catch (e) {
+            console.error("Error adding document: ", e);
+            showNotification('Error al registrar el vehículo.', 'error');
+        }
+    });
+
+    // Manejador de clics en la lista de vehículos activos (botón de salida).
+    activeVehiclesList.addEventListener('click', async (e) => {
+        if (e.target.closest('.exit-btn')) {
+            const placa = e.target.closest('.exit-btn').dataset.placa;
+            document.getElementById('placa-salida').value = placa;
+            document.getElementById('salida-tab').click();
+            exitForm.scrollIntoView({ behavior: 'smooth' });
+            
+            // NUEVA FUNCIONALIDAD: Buscar vehículo en Firestore para prellenar el formulario.
+            if (!db) return;
+            try {
+                const q = query(collection(db, `artifacts/${appId}/public/data/vehiculosActivos`), where("placa", "==", placa));
+                const querySnapshot = await getDocs(q);
+                if (!querySnapshot.empty) {
+                    const vehicleDoc = querySnapshot.docs[0];
+                    const vehicleData = vehicleDoc.data();
+                    document.getElementById('vehicle-type-exit').value = vehicleData.tipoVehiculo;
+                    document.getElementById('entry-time').textContent = new Date(vehicleData.horaEntrada).toLocaleString();
+                }
+            } catch (e) {
+                console.error("Error pre-filling exit form: ", e);
+                showNotification('Error al cargar datos del vehículo.', 'error');
+            }
+        }
+    });
+
+    // Manejador del formulario de registro de salida.
+    exitForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!db) {
+            showNotification('Error de conexión con la base de datos.', 'error');
+            return;
+        }
+        const placa = document.getElementById('placa-salida').value.toUpperCase();
+        const specialClient = specialClientCheckbox.checked;
+        const ajusteEspecial = specialClient ? parseNumber(adjustmentsInput.value) : 0;
+        const costoFinalManual = specialClient && totalInput.value ? parseNumber(totalInput.value) : null;
+
+        // NUEVA FUNCIONALIDAD: Buscar el vehículo y calcular el costo.
+        try {
+            const q = query(collection(db, `artifacts/${appId}/public/data/vehiculosActivos`), where("placa", "==", placa));
+            const querySnapshot = await getDocs(q);
+            if (querySnapshot.empty) {
+                showNotification('Vehículo no encontrado.', 'error');
+                return;
+            }
+
+            const vehicleDoc = querySnapshot.docs[0];
+            const vehicleData = vehicleDoc.data();
+            const horaSalida = Date.now();
+            const tiempoEstadiaMs = horaSalida - vehicleData.horaEntrada;
+            const tiempoEstadiaMin = Math.ceil(tiempoEstadiaMs / (1000 * 60));
+
+            const price = currentPrices.find(p => p.tipoVehiculo === vehicleData.tipoVehiculo);
+            if (!price) {
+                showNotification('Tarifa no encontrada para este tipo de vehículo.', 'error');
+                return;
+            }
+
+            let costoOriginal;
+            let tiempoEstadiaTexto;
+            
+            // NUEVA LÓGICA DE COBRO: Cobro por bloques de 30 minutos o por tarifa fija.
+            if (price.tarifaFija) {
+                // Si es una tarifa fija, el costo es el valor de la tarifa.
+                costoOriginal = price.tarifaFija;
+                tiempoEstadiaTexto = `${price.tiempoFijo}`;
+            } else {
+                // Lógica de cobro por bloques de 30 minutos.
+                const tarifaMediaHora = price.tarifaMinuto * 30;
+                if (tiempoEstadiaMin < 30) {
+                    costoOriginal = 0;
+                } else {
+                    const numBloques = Math.ceil(tiempoEstadiaMin / 30);
+                    costoOriginal = numBloques * tarifaMediaHora;
+                }
+                tiempoEstadiaTexto = `${Math.floor(tiempoEstadiaMin / 60)} horas, ${tiempoEstadiaMin % 60} minutos`;
+            }
+
+            const costoFinal = costoFinalManual !== null ? costoFinalManual : (costoOriginal + ajusteEspecial);
+
+            const data = {
+                placa,
+                tipoVehiculo: vehicleData.tipoVehiculo,
+                horaEntrada: vehicleData.horaEntrada,
+                horaSalida,
+                tiempoEstadia: tiempoEstadiaTexto,
+                costoOriginal,
+                ajusteEspecial,
+                costoFinal,
+                esClienteEspecial: specialClient
+            };
+
+            showReceipt(data);
+            
+            // NUEVA FUNCIONALIDAD: Eliminar el vehículo de la base de datos de "vehiculosActivos".
+            await deleteDoc(doc(db, `artifacts/${appId}/public/data/vehiculosActivos`, vehicleDoc.id));
+            
+            // NUEVA FUNCIONALIDAD: Guardar el recibo en la base de datos de "recibos".
+            await addDoc(collection(db, `artifacts/${appId}/public/data/recibos`), data);
+            
+            showNotification('Recibo generado y guardado. Vehículo retirado.', 'success');
+            exitForm.reset();
+            specialClientCheckbox.checked = false;
+            specialClientDetails.classList.add('hidden');
+            totalInput.value = '';
+            adjustmentsInput.value = '';
+            resultDiv.classList.remove('hidden');
+            fetchActiveVehicles(); // Actualizar la lista después de la salida.
+        } catch (e) {
+            console.error("Error al procesar la salida:", e);
+            showNotification('Error al procesar la salida. Intenta de nuevo.', 'error');
+        }
+    });
+
+    // Manejador del checkbox de cliente especial.
+    specialClientCheckbox.addEventListener('change', () => {
+        if (specialClientCheckbox.checked) {
+            specialClientDetails.classList.remove('hidden');
+        } else {
+            specialClientDetails.classList.add('hidden');
+        }
+    });
+
+    // Manejador del botón de imprimir recibo (PDF).
+    printReceiptBtn.addEventListener('click', () => {
+        if (!receiptData) {
+            showNotification('No hay recibo para imprimir.', 'info');
+            return;
+        }
+
+        const doc = new jsPDF();
+        doc.setFontSize(18);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Recibo de Parqueadero', 105, 20, null, null, 'center');
+        
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(150);
+        doc.text(`ID: ${receiptData.id || 'N/A'}`, 105, 25, null, null, 'center');
+        
+        let y = 40;
+        doc.setFontSize(12);
+        doc.setTextColor(0);
+        doc.text(`Fecha: ${new Date(receiptData.horaSalida).toLocaleDateString()}`, 20, y);
+        y += 7;
+        doc.text(`Hora: ${new Date(receiptData.horaSalida).toLocaleTimeString()}`, 20, y);
+        y += 10;
+        doc.text(`Placa: ${receiptData.placa}`, 20, y);
+        y += 7;
+        doc.text(`Tipo de Vehículo: ${receiptData.tipoVehiculo}`, 20, y);
+        y += 7;
+        doc.text(`Hora de Entrada: ${new Date(receiptData.horaEntrada).toLocaleString()}`, 20, y);
+        y += 7;
+        doc.text(`Hora de Salida: ${new Date(receiptData.horaSalida).toLocaleString()}`, 20, y);
+        y += 10;
+        
+        if (receiptData.esClienteEspecial) {
+            doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
+            y += 7;
+            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
+            y += 10;
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(52, 152, 219);
+            doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
+            y += 20;
+        } else {
+            doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
+            y += 7;
+            doc.text(`Costo Original: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
+            y += 7;
+            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
+            y += 10;
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(52, 152, 219);
+            doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
+            y += 20;
+        }
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 100, 100);
+        doc.text('¡Gracias por su visita!', 105, y, null, null, 'center');
+        y += 5;
+        doc.text('Medellín, Antioquia, Colombia', 105, y, null, null, 'center');
+        
+        doc.save(`Recibo-${receiptData.placa}.pdf`);
+    });
+
+    // Manejador del botón de la pestaña de administración.
+    adminTabButton.addEventListener('click', async () => {
+        document.getElementById('admin-tab').classList.add('active-tab');
+        document.getElementById('operaciones-tab').classList.remove('active-tab');
+        document.getElementById('operaciones-content').classList.add('hidden');
+        document.getElementById('admin-content').classList.remove('hidden');
+
+        renderPrices(currentPrices);
+    });
+
+    // Manejador del botón de la pestaña de operaciones.
+    document.getElementById('operaciones-tab-button').addEventListener('click', () => {
+        document.getElementById('operaciones-tab').classList.add('active-tab');
+        document.getElementById('admin-tab').classList.remove('active-tab');
+        document.getElementById('admin-content').classList.add('hidden');
+        document.getElementById('operaciones-content').classList.remove('hidden');
+    });
+
+    // Manejador de la pestaña de salida.
+    document.getElementById('salida-tab').addEventListener('click', () => {
+        document.getElementById('salida-content').classList.remove('hidden');
+        document.getElementById('entrada-content').classList.add('hidden');
+    });
+
+    // Manejador de la pestaña de entrada.
+    document.getElementById('entrada-tab').addEventListener('click', () => {
+        document.getElementById('entrada-content').classList.remove('hidden');
+        document.getElementById('salida-content').classList.add('hidden');
+    });
+
+    // Manejador del botón para cerrar el recibo.
+    document.getElementById('close-result-btn').addEventListener('click', () => {
+        resultDiv.classList.add('hidden');
+        receiptData = null;
+    });
+
+    // Manejador del botón para crear una nueva tarifa.
+    newPriceBtn.addEventListener('click', async () => {
+        adminPricesSection.classList.add('hidden');
+        editPricesSection.classList.remove('hidden');
+        document.getElementById('edit-price-title').textContent = 'Crear Nueva Tarifa';
+        newRateBtn.textContent = 'Crear Tarifa';
+        newRateBtn.dataset.mode = 'new';
+        newRateBtn.dataset.id = '';
+        vehicleTypeSelect.value = 'Carro';
+        hourlyRateInput.value = '';
+        dailyRateInput.value = '';
+        hourlyMinutesInput.value = '';
+        vehicleTypeSelect.disabled = false;
+        
+        // NUEVA FUNCIONALIDAD: Llenar el select de tipos de vehículo con las opciones disponibles
+        vehicleTypeSelect.innerHTML = '';
+        const tiposVehiculoExistentes = currentPrices.map(p => p.tipoVehiculo);
+        const opcionesDefault = ['Carro', 'Moto', 'Carro (12 horas)', 'Moto (12 horas)'];
+        opcionesDefault.forEach(tipo => {
+            const option = document.createElement('option');
+            option.value = tipo;
+            option.textContent = tipo;
+            // Deshabilita los tipos de vehículo que ya tienen una tarifa
+            if (tiposVehiculoExistentes.includes(tipo)) {
+                 option.disabled = true;
+            }
+            vehicleTypeSelect.appendChild(option);
+        });
+
+    });
+
+    // Manejador de clics en la lista de precios para editar.
+    pricesList.addEventListener('click', (e) => {
+        if (e.target.closest('.edit-price-btn')) {
+            const id = e.target.closest('.edit-price-btn').dataset.id;
+            const priceToEdit = currentPrices.find(p => p.id === id);
+            if (priceToEdit) {
+                adminPricesSection.classList.add('hidden');
+                editPricesSection.classList.remove('hidden');
+                document.getElementById('edit-price-title').textContent = 'Editar Tarifa';
+                newRateBtn.textContent = 'Guardar Cambios';
+                newRateBtn.dataset.mode = 'edit';
+                newRateBtn.dataset.id = id;
+                vehicleTypeSelect.value = priceToEdit.tipoVehiculo;
+                
+                // Limpia los campos antes de asignar los valores
+                hourlyRateInput.value = '';
+                dailyRateInput.value = '';
+                hourlyMinutesInput.value = '';
+                
+                // Muestra los valores correctos dependiendo si es tarifa fija o por minuto
+                if (priceToEdit.tarifaMinuto) {
+                    hourlyRateInput.value = formatNumber(priceToEdit.tarifaMinuto * 60);
+                    dailyRateInput.value = formatNumber(priceToEdit.tarifaMinuto * 60 * 24);
+                    hourlyMinutesInput.value = priceToEdit.tarifaMinuto;
+                } else if (priceToEdit.tarifaFija) {
+                    // Para tarifas fijas, deshabilitamos la edición de los campos de tiempo
+                    hourlyRateInput.disabled = true;
+                    dailyRateInput.disabled = true;
+                    hourlyMinutesInput.disabled = true;
+                }
+                
+                vehicleTypeSelect.disabled = true;
+            }
+        }
+    });
+
+    // Manejador del botón para guardar nuevas tarifas o editar tarifas existentes.
+    newRateBtn.addEventListener('click', async () => {
+        const mode = newRateBtn.dataset.mode;
+        const id = newRateBtn.dataset.id;
+        const tipoVehiculo = vehicleTypeSelect.value;
+        const tarifaMinuto = parseNumber(hourlyMinutesInput.value);
+
+        // NUEVA FUNCIONALIDAD: Lógica para manejar las tarifas fijas de 12 horas.
+        let tarifaData;
+        if (tipoVehiculo.includes('(12 horas)')) {
+            const tarifaPorHora = currentPrices.find(p => p.tipoVehiculo === tipoVehiculo.split(' ')[0])?.tarifaMinuto * 60;
+            if (!tarifaPorHora) {
+                showNotification(`No se ha definido una tarifa por minuto para el tipo base: ${tipoVehiculo.split(' ')[0]}.`, 'error');
+                return;
+            }
+            tarifaData = { tipoVehiculo, tarifaFija: tarifaPorHora * 12, tiempoFijo: '12 horas' };
+        } else {
+            if (!tipoVehiculo || isNaN(tarifaMinuto) || tarifaMinuto <= 0) {
+                showNotification('Por favor, ingresa una tarifa válida.', 'error');
+                return;
+            }
+            tarifaData = { tipoVehiculo, tarifaMinuto };
+        }
+
+        if (!db) return;
+
+        try {
+            if (mode === 'new') {
+                await setDoc(doc(db, `artifacts/${appId}/public/data/precios`, tipoVehiculo), tarifaData);
+                showNotification('Tarifa creada con éxito.', 'success');
+            } else if (mode === 'edit' && id) {
+                await setDoc(doc(db, `artifacts/${appId}/public/data/precios`, id), tarifaData);
+                showNotification('Tarifa actualizada con éxito.', 'success');
+            }
+            editPricesSection.classList.add('hidden');
+            adminPricesSection.classList.remove('hidden');
+            // La lista se actualizará automáticamente gracias a onSnapshot.
+        } catch (e) {
+            console.error("Error saving price: ", e);
+            showNotification('Error al guardar la tarifa.', 'error');
+        }
+    });
+
+    // Manejador del botón para volver a la sección de administración de tarifas.
+    backToAdminBtn.addEventListener('click', () => {
+        editPricesSection.classList.add('hidden');
+        adminPricesSection.classList.remove('hidden');
+    });
+
+    // Manejador para el formato de los inputs de ajuste y costo final.
+    adjustmentsInput.addEventListener('input', () => {
+        adjustmentsInput.value = formatNumber(parseNumber(adjustmentsInput.value));
+    });
+
+    totalInput.addEventListener('input', () => {
+        totalInput.value = formatNumber(parseNumber(totalInput.value));
+    });
+
+    // Cargar vehículos y precios al inicio si hay un usuario autenticado.
+    if (auth && auth.currentUser) {
+        fetchActiveVehicles();
+        await fetchAndListenToPrices();
+    }
 });
