@@ -414,13 +414,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         const diffInMinutes = Math.round(diffInMs / (1000 * 60));
 
         let totalCost = 0;
+        const vehicleType = vehicle.type;
 
         if (diffInMinutes <= 30) {
             totalCost = 0;
         } else if (diffInMinutes > 30 && diffInMinute <= 60) {
             totalCost = prices[vehicle.type].mediaHora;
         } else {
-            const vehicleType = vehicle.type;
+            
             const pricePerHour = prices[vehicleType].hora;
             const priceFor12Hours = prices[vehicleType].doceHoras;
             
