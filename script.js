@@ -1,6 +1,6 @@
-const { jsPDF } = window.jspdf;
-import { collection, addDoc, getDocs, query, where, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-app.js";
+import { getFirestore, collection, addDoc, getDocs, query, where, deleteDoc, doc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
+const { jsPDF } = window.jspdf;
 
 // Configuración de Firebase - REEMPLAZA CON TU PROPIA CONFIGURACIÓN SI ES NECESARIO
 const firebaseConfig = {
@@ -53,13 +53,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // --- LÓGICA DE BÚSQUEDA ---
     const vehicleSearchInput = document.getElementById('vehicle-search');
 
-    if(vehicleSearchInput) {
+    if (vehicleSearchInput) {
         vehicleSearchInput.addEventListener('input', (e) => {
             const searchTerm = e.target.value.trim().toUpperCase();
             if (searchTerm === '') {
                 updateActiveVehiclesList('all');
             } else {
-                const filteredVehicles = activeVehicles.filter(vehicle => 
+                const filteredVehicles = activeVehicles.filter(vehicle =>
                     (vehicle.plate && vehicle.plate.toUpperCase().includes(searchTerm)) ||
                     (vehicle.description && vehicle.description.toUpperCase().includes(searchTerm))
                 );
@@ -113,7 +113,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, 5000);
     };
 
-    // Función modificada para aceptar vehículos filtrados
     const updateActiveVehiclesList = (filterType = 'all', vehiclesToDisplay = activeVehicles) => {
         activeVehiclesList.innerHTML = '';
         const filteredVehicles = vehiclesToDisplay.filter(v => {
@@ -149,14 +148,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    // Cargar tarifas y vehículos desde localStorage (manteniendo el de precios en localStorage)
     const loadData = async () => {
         const storedPrices = localStorage.getItem('parkingPrices');
         if (storedPrices) {
             prices = JSON.parse(storedPrices);
         }
 
-        // Cargar precios en los campos de administración
         if (prices.carro) {
             document.getElementById('car-half-hour').value = prices.carro.mediaHora;
             document.getElementById('car-hour').value = prices.carro.hora;
@@ -192,7 +189,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('other-night-large-default').value = prices['otros-noche'].grande.noche;
         }
 
-        // Cargar vehículos desde Firestore
         const vehiclesCol = collection(window.db, 'activeVehicles');
         const vehicleSnapshot = await getDocs(vehiclesCol);
         activeVehicles = vehicleSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -200,7 +196,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateActiveVehiclesList();
     };
 
-    // Filtros de vehículos activos
     document.querySelectorAll('.filter-button').forEach(button => {
         button.addEventListener('click', () => {
             document.querySelectorAll('.filter-button').forEach(btn => btn.classList.remove('active'));
@@ -210,7 +205,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
-    // Manejo de pestañas
     const tabButtons = document.querySelectorAll('.tab-button');
     const tabContents = document.querySelectorAll('.tab-content');
 
@@ -231,7 +225,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
-    // Funciones de Autenticación
+    const users = {
+        'admin': 'admin123',
+        'trabajador': 'trabajador123'
+    };
+
     const login = (username, password) => {
         if (users[username] === password) {
             localStorage.setItem('currentUser', username);
@@ -269,7 +267,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         loginForm.reset();
     };
 
-    // Manejadores de eventos
     loginForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const username = document.getElementById('username').value;
@@ -287,7 +284,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         mainApp.style.display = 'none';
     }
 
-    // Guardar tarifas del administrador
     savePricesBtn.addEventListener('click', () => {
         prices.carro = {
             mediaHora: parseNumber(document.getElementById('car-half-hour').value),
@@ -317,7 +313,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadData();
     });
 
-    // Mostrar/ocultar campos de otros vehículos y cambiar placeholder
     vehicleTypeEntry.addEventListener('change', () => {
         const selectedType = vehicleTypeEntry.value;
         if (selectedType === 'otros-mensualidad' || selectedType === 'otros-noche') {
@@ -338,7 +333,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // Registrar entrada de vehículo
     entryForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const plate = document.getElementById('plate-entry').value.trim().toUpperCase();
@@ -396,7 +390,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // Controlar visibilidad de la sección de cliente especial
     let currentCalculatedCost = 0;
     document.getElementById('plate-exit').addEventListener('input', () => {
         const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
@@ -409,7 +402,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // Calcular costo en tiempo real con ajustes de cliente especial
     const updateCalculatedCost = () => {
         const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
         const vehicle = activeVehicles.find(v => v.plate === plate);
@@ -466,7 +458,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('plate-exit').addEventListener('input', updateCalculatedCost);
 
-    // Registrar salida y calcular costo
     exitForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
@@ -549,7 +540,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 costoOriginal: nightPrice
             };
 
-        } else { // Carros y Motos por hora
+        } else {
             if (diffInMinutes <= 30) {
                 totalCost = 0;
                 resultHTML = `
@@ -574,7 +565,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             } else {
                 const vehicleType = vehicle.type;
 
-                // Nuevo cálculo de costo: primero media hora, luego horas completas
                 if (diffInMinutes <= 60) {
                     totalCost = prices[vehicleType].mediaHora;
                 } else {
@@ -628,11 +618,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         resultDiv.style.display = 'block';
         resultDiv.classList.add('fade-in');
 
-        // --- ELIMINA EL DOCUMENTO DE FIRESTORE ---
         try {
             await deleteDoc(doc(window.db, "activeVehicles", vehicle.id));
             showNotification(`Salida de ${displayPlate} registrada.`, 'success');
-            await loadData(); // Recarga la lista de vehículos desde Firestore
+            await loadData();
         } catch (e) {
             console.error("Error al eliminar documento: ", e);
             showNotification("Error al registrar la salida. Por favor, intente de nuevo.", 'error');
@@ -647,7 +636,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         localStorage.setItem('lastReceipt', JSON.stringify(receiptData));
     });
 
-    // Descargar recibo de pago en PDF
     printReceiptBtn.addEventListener('click', () => {
         const receiptData = JSON.parse(localStorage.getItem('lastReceipt'));
         if (!receiptData) {
@@ -717,7 +705,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
             y += 20;
         } else if (receiptData.esNoche) {
-             doc.text(`Tarifa Plana por Noche: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
+            doc.text(`Tarifa Plana por Noche: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
             y += 10;
             doc.setFontSize(14);
             doc.setFont('helvetica', 'bold');
@@ -749,7 +737,5 @@ document.addEventListener('DOMContentLoaded', async () => {
         showNotification('Recibo PDF generado con éxito.', 'success');
     });
 
-    // Llamada inicial para cargar los datos y actualizar la lista de vehículos.
-    // Esto se hace al final para asegurar que todas las funciones ya estén definidas.
     await loadData();
 });
