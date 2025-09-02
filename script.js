@@ -1,746 +1,785 @@
+/**
+ * @fileoverview Lógica principal para la aplicación de gestión de parqueadero.
+ * Este script maneja la autenticación, la gestión de vehículos activos y salientes,
+ * la actualización de tarifas de forma dinámica y la generación de recibos en PDF.
+ * Se conecta a Firestore para la persistencia de datos y garantiza una experiencia de usuario
+ * fluida y en tiempo real.
+ *
+ * NOTA: Para el correcto funcionamiento en el entorno de Canvas, se utilizan variables
+ * globales para la configuración de Firebase y el token de autenticación.
+ * * Versión: 2.0
+ */
+
+// Importaciones de Firebase, Auth y Firestore
+// Se asume que estas importaciones están disponibles a través de la etiqueta <script type="module">
+// en el archivo HTML principal y se exponen globalmente.
+
 const { jsPDF } = window.jspdf;
-import { collection, addDoc, getDocs, query, where, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore.js";
 
-document.addEventListener('DOMContentLoaded', async () => {
-    // Definición de la función de utilidad al inicio del script
-    const formatNumber = (num) => new Intl.NumberFormat('es-CO').format(num);
-    const parseNumber = (str) => parseInt(str.replace(/\./g, '')) || 0;
+// =====================================================================================================================
+// Definición de variables globales y elementos del DOM
+// =====================================================================================================================
 
-    // Definición de elementos del DOM
-    const loginSection = document.getElementById('login-section');
-    const mainApp = document.getElementById('main-app');
-    const loginForm = document.getElementById('login-form');
-    const btnLogin = document.getElementById('btn-login');
-    const btnLogout = document.getElementById('btn-logout');
-    const adminTabButton = document.getElementById('admin-tab-button');
-    const entryForm = document.getElementById('entry-form');
-    const exitForm = document.getElementById('exit-form');
-    const resultDiv = document.getElementById('result');
-    const resultContent = document.getElementById('result-content');
-    const activeVehiclesList = document.getElementById('active-vehicles');
-    const printReceiptBtn = document.getElementById('print-receipt');
-    const savePricesBtn = document.getElementById('save-prices');
-    const notificationArea = document.getElementById('notification-area');
-    const loginMessage = document.getElementById('login-message');
-    const specialClientCheckbox = document.getElementById('special-client');
-    const othersTypeContainer = document.getElementById('others-type-container');
-    const vehicleTypeEntry = document.getElementById('type-entry');
-    const othersVehicleSize = document.getElementById('others-vehicle-size');
-    const othersMonthlyPrice = document.getElementById('others-monthly-price');
-    const specialClientSection = document.getElementById('special-client-section');
-    const specialClientAdjustment = document.getElementById('special-client-adjustment');
-    const exitCostDisplay = document.getElementById('exit-cost-display');
-    const plateEntryInput = document.getElementById('plate-entry');
-    const plateLabel = document.getElementById('plate-label');
-    const otherPriceLabel = document.getElementById('other-price-label');
+// Variables globales para la configuración de Firebase
+const db = window.db;
+const auth = window.auth;
+const appId = window.appId;
+const initialAuthToken = window.initialAuthToken;
 
+// Elementos del DOM
+const loginSection = document.getElementById('login-section');
+const mainApp = document.getElementById('main-app');
+const loginForm = document.getElementById('login-form');
+const btnLogin = document.getElementById('btn-login');
+const btnLogout = document.getElementById('btn-logout');
+const adminTabButton = document.getElementById('admin-tab-button');
+const entryForm = document.getElementById('entry-form');
+const exitForm = document.getElementById('exit-form');
+const resultDiv = document.getElementById('result');
+const resultContent = document.getElementById('result-content');
+const activeVehiclesList = document.getElementById('active-vehicles');
+const printReceiptBtn = document.getElementById('print-receipt');
+const savePricesBtn = document.getElementById('save-prices');
+const notificationArea = document.getElementById('notification-area');
+const loginMessage = document.getElementById('login-message');
+const specialClientCheckbox = document.getElementById('special-client');
+const specialClientSection = document.getElementById('special-client-section');
+const vehicleSearchInput = document.getElementById('vehicle-search');
+const tabs = document.querySelectorAll('.tab-button');
+const entryTypeSelect = document.getElementById('type-entry');
+const othersTypeContainer = document.getElementById('others-type-container');
 
-    const vehicleSearchInput = document.getElementById('vehicle-search');
+// Variables de estado de la aplicación
+let currentUser = null;
+let currentPrices = {};
+let activeVehicles = [];
+let filteredVehicles = [];
 
-    if(vehicleSearchInput) {
-        vehicleSearchInput.addEventListener('input', (e) => {
-            const searchTerm = e.target.value.trim().toUpperCase();
-            if (searchTerm === '') {
-                updateActiveVehiclesList('all');
-            } else {
-                const filteredVehicles = activeVehicles.filter(vehicle => 
-                    (vehicle.plate && vehicle.plate.toUpperCase().includes(searchTerm)) ||
-                    (vehicle.description && vehicle.description.toUpperCase().includes(searchTerm))
-                );
-                updateActiveVehiclesList('all', filteredVehicles);
-            }
-        });
-    }
-    // Tarifas iniciales con estructura completa
-    let prices = {
-        carro: {
-            mediaHora: 3000,
-            hora: 6000,
-            doceHoras: 30000,
-            mes: 250000
-        },
-        moto: {
-            mediaHora: 2000,
-            hora: 4000,
-            doceHoras: 15000,
-            mes: 150000 
-        },
-        'otros-mensualidad': {
-            'pequeño': { min: 100000, max: 150000, mes: 120000 },
-            'mediano': { min: 151000, max: 200000, mes: 180000 },
-            'grande': { min: 201000, max: 300000, mes: 250000 }
-        },
-        'otros-noche': {
-            'pequeño': { min: 10000, max: 15000, noche: 12000 },
-            'mediano': { min: 15100, max: 20000, noche: 18000 },
-            'grande': { min: 20100, max: 30000, noche: 25000 }
-        }
-    };
+// =====================================================================================================================
+// Funciones de utilidad
+// =====================================================================================================================
 
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                // Usuarios del sistema
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                const users = {
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    'admin': 'admin123',
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    'trabajador': 'trabajador123'
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                };
-    
-    // Declaración de la variable para vehículos activos
-    let activeVehicles = [];
+/**
+ * Formatea un número a formato de moneda colombiana.
+ * @param {number} num El número a formatear.
+ * @returns {string} El número formateado como string.
+ */
+const formatNumber = (num) => new Intl.NumberFormat('es-CO').format(num);
 
-    const showNotification = (message, type = 'info') => {
-        notificationArea.textContent = message;
-        notificationArea.className = `message ${type}-message`;
-        notificationArea.style.display = 'block';
-        notificationArea.classList.add('fade-in');
-        setTimeout(() => {
-            notificationArea.style.display = 'none';
-        }, 5000);
-    };
+/**
+ * Muestra una notificación temporal al usuario.
+ * @param {string} message El mensaje a mostrar.
+ * @param {string} type El tipo de notificación (success, error, warning).
+ */
+const showNotification = (message, type = 'info') => {
+    notificationArea.textContent = message;
+    notificationArea.className = `message ${type}-message`;
+    notificationArea.style.display = 'block';
+    setTimeout(() => {
+        notificationArea.style.display = 'none';
+    }, 5000);
+};
 
-   const updateActiveVehiclesList = (filterType = 'all', vehicleList = null) => {
-    activeVehiclesList.innerHTML = '';
-    const vehiclesToDisplay = vehicleList || activeVehicles.filter(v => {
-        if (filterType === 'all') return true;
-        if (filterType === 'mensualidad') {
-            return v.type.includes('mensualidad');
-        }
-        if (filterType === 'otros-noche') {
-            return v.type.includes('otros-noche');
-        }
-        return v.type === filterType;
-    });
+/**
+ * Muestra u oculta un elemento del DOM.
+ * @param {HTMLElement} element El elemento a manipular.
+ * @param {boolean} show Si es `true`, muestra el elemento; si es `false`, lo oculta.
+ */
+const toggleElementVisibility = (element, show) => {
+    element.style.display = show ? 'block' : 'none';
+};
 
-    if (vehiclesToDisplay.length === 0) {
-        activeVehiclesList.innerHTML = '<li><i class="fas fa-info-circle"></i> No hay vehículos activos de este tipo.</li>';
+// =====================================================================================================================
+// Lógica de Autenticación y UI
+// =====================================================================================================================
+
+/**
+ * Maneja el inicio de sesión del usuario.
+ * Simula la autenticación y ajusta la UI en consecuencia.
+ * @param {Event} e El evento de envío del formulario.
+ */
+const handleLogin = async (e) => {
+    e.preventDefault();
+    const username = loginForm.username.value;
+    const password = loginForm.password.value;
+
+    if (username === 'admin' && password === 'admin') {
+        currentUser = { uid: 'admin-id', role: 'admin' };
+        showMainApp();
     } else {
-        vehiclesToDisplay.forEach(v => {
-            const li = document.createElement('li');
-            let extraInfo = '';
-            let displayPlate = v.plate;
-            if (v.type.includes('mensualidad')) {
-                const entryDate = new Date(v.entryTime);
-                const nextPaymentDate = new Date(entryDate);
-                nextPaymentDate.setMonth(nextPaymentDate.getMonth() + 1);
-                extraInfo = `<br>Próximo pago: <strong>${nextPaymentDate.toLocaleDateString('es-CO')}</strong>`;
-            }
-            if (v.type.includes('otros')) {
-                displayPlate = v.description;
-            }
-            li.innerHTML = `<span>Placa/Descripción: <strong>${displayPlate}</strong></span> <span>Tipo: ${v.type}</span> <span>Entrada: ${new Date(v.entryTime).toLocaleString()}${extraInfo}</span>`;
-            activeVehiclesList.appendChild(li);
-        });
+        showNotification('Credenciales incorrectas.', 'error');
+        loginMessage.textContent = 'Credenciales incorrectas.';
+        loginMessage.style.display = 'block';
     }
 };
 
-    // Cargar tarifas y vehículos desde localStorage (manteniendo el de precios en localStorage)
-    const loadData = async () => {
-        const storedPrices = localStorage.getItem('parkingPrices');
-        if (storedPrices) {
-            prices = JSON.parse(storedPrices);
-        }
+/**
+ * Muestra la interfaz principal de la aplicación y oculta la de inicio de sesión.
+ */
+const showMainApp = async () => {
+    toggleElementVisibility(loginSection, false);
+    toggleElementVisibility(mainApp, true);
+    toggleElementVisibility(btnLogin, false);
+    toggleElementVisibility(btnLogout, true);
+    loginMessage.style.display = 'none';
 
-        // Cargar precios en los campos de administración
-        if (prices.carro) {
-            document.getElementById('car-half-hour').value = prices.carro.mediaHora;
-            document.getElementById('car-hour').value = prices.carro.hora;
-            document.getElementById('car-12h').value = prices.carro.doceHoras;
-            document.getElementById('car-month').value = prices.carro.mes;
-        }
-        if (prices.moto) {
-            document.getElementById('bike-half-hour').value = prices.moto.mediaHora;
-            document.getElementById('bike-hour').value = prices.moto.hora;
-            document.getElementById('bike-12h').value = prices.moto.doceHoras;
-            document.getElementById('bike-month').value = prices.moto.mes;
-        }
-        if (prices['otros-mensualidad']) {
-            document.getElementById('other-small-min').value = prices['otros-mensualidad'].pequeño.min;
-            document.getElementById('other-small-max').value = prices['otros-mensualidad'].pequeño.max;
-            document.getElementById('other-small-default').value = prices['otros-mensualidad'].pequeño.mes;
-            document.getElementById('other-medium-min').value = prices['otros-mensualidad'].mediano.min;
-            document.getElementById('other-medium-max').value = prices['otros-mensualidad'].mediano.max;
-            document.getElementById('other-medium-default').value = prices['otros-mensualidad'].mediano.mes;
-            document.getElementById('other-large-min').value = prices['otros-mensualidad'].grande.min;
-            document.getElementById('other-large-max').value = prices['otros-mensualidad'].grande.max;
-            document.getElementById('other-large-default').value = prices['otros-mensualidad'].grande.mes;
-        }
-        if (prices['otros-noche']) {
-            document.getElementById('other-night-small-min').value = prices['otros-noche'].pequeño.min;
-            document.getElementById('other-night-small-max').value = prices['otros-noche'].pequeño.max;
-            document.getElementById('other-night-small-default').value = prices['otros-noche'].pequeño.noche;
-            document.getElementById('other-night-medium-min').value = prices['otros-noche'].mediano.min;
-            document.getElementById('other-night-medium-max').value = prices['otros-noche'].mediano.max;
-            document.getElementById('other-night-medium-default').value = prices['otros-noche'].mediano.noche;
-            document.getElementById('other-night-large-min').value = prices['otros-noche'].grande.min;
-            document.getElementById('other-night-large-max').value = prices['otros-noche'].grande.max;
-            document.getElementById('other-night-large-default').value = prices['otros-noche'].grande.noche;
-        }
-        
-        // Cargar vehículos desde Firestore
-        const vehiclesCol = collection(window.db, 'activeVehicles');
-        const vehicleSnapshot = await getDocs(vehiclesCol);
-        activeVehicles = vehicleSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-        updateActiveVehiclesList();
-    };
-
-    // Filtros de vehículos activos
-    document.querySelectorAll('.filter-button').forEach(button => {
-        button.addEventListener('click', () => {
-            document.querySelectorAll('.filter-button').forEach(btn => btn.classList.remove('active'));
-            button.classList.add('active');
-            const filterType = button.dataset.filter;
-            updateActiveVehiclesList(filterType);
-        });
-    });
-
-    // Manejo de pestañas
-    const tabButtons = document.querySelectorAll('.tab-button');
-    const tabContents = document.querySelectorAll('.tab-content');
-
-    tabButtons.forEach(button => {
-        button.addEventListener('click', () => {
-            tabButtons.forEach(btn => btn.classList.remove('active'));
-            tabContents.forEach(content => content.style.display = 'none');
-
-            button.classList.add('active');
-            const targetTabId = button.dataset.tab;
-            document.getElementById(targetTabId).style.display = 'block';
-            document.getElementById(targetTabId).classList.add('fade-in');
-
-            if (targetTabId === 'active-vehicles-tab') {
-                updateActiveVehiclesList('all');
-                document.querySelector('.filter-button[data-filter="all"]').classList.add('active');
-            }
-        });
-    });
-
-    // Funciones de Autenticación
-    const login = (username, password) => {
-        if (users[username] === password) {
-            localStorage.setItem('currentUser', username);
-            loginMessage.style.display = 'none';
-            showApp(username);
-        } else {
-            loginMessage.textContent = 'Usuario o contraseña incorrectos.';
-            loginMessage.className = 'message error-message fade-in';
-            loginMessage.style.display = 'block';
-        }
-    };
-
-    const showApp = (user) => {
-        loginSection.style.display = 'none';
-        mainApp.style.display = 'block';
-        btnLogin.style.display = 'none';
-        btnLogout.style.display = 'inline';
-
-        if (user === 'admin') {
-            adminTabButton.style.display = 'inline-flex';
-        } else {
-            adminTabButton.style.display = 'none';
-        }
-        document.querySelector('.tab-button[data-tab="entry-exit-tab"]').click();
-        updateActiveVehiclesList('all');
-    };
-
-    const logout = () => {
-        localStorage.removeItem('currentUser');
-        loginSection.style.display = 'block';
-        mainApp.style.display = 'none';
-        btnLogin.style.display = 'inline';
-        btnLogout.style.display = 'none';
-        resultDiv.style.display = 'none';
-        loginForm.reset();
-    };
-
-    // Manejadores de eventos
-    loginForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        const username = document.getElementById('username').value;
-        const password = document.getElementById('password').value;
-        login(username, password);
-    });
-
-    btnLogout.addEventListener('click', logout);
-    
-    const currentUser = localStorage.getItem('currentUser');
-    if (currentUser) {
-        showApp(currentUser);
+    // Mostrar el panel de admin si el usuario es admin
+    if (currentUser && currentUser.role === 'admin') {
+        toggleElementVisibility(adminTabButton, true);
+        specialClientSection.style.display = 'block';
+        await loadAdminPrices();
     } else {
-        loginSection.style.display = 'block';
-        mainApp.style.display = 'none';
+        toggleElementVisibility(adminTabButton, false);
+        specialClientSection.style.display = 'none';
+        await loadAdminPrices();
     }
 
-    // Guardar tarifas del administrador
-    savePricesBtn.addEventListener('click', () => {
-        
-        prices.carro = {
-            mediaHora: parseNumber(document.getElementById('car-half-hour').value),
-            hora: parseNumber(document.getElementById('car-hour').value),
-            doceHoras: parseNumber(document.getElementById('car-12h').value),
-            mes: parseNumber(document.getElementById('car-month').value)
-        };
-        
-        prices.moto = {
-            mediaHora: parseNumber(document.getElementById('bike-half-hour').value),
-            hora: parseNumber(document.getElementById('bike-hour').value),
-            doceHoras: parseNumber(document.getElementById('bike-12h').value),
-            mes: parseNumber(document.getElementById('bike-month').value)
-        };
+    // Inicializa los listeners para las pestañas
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelector('.tab-button.active').classList.remove('active');
+            tab.classList.add('active');
+            document.querySelector('.tab-content.active-tab').classList.remove('active-tab');
+            document.querySelector('.tab-content.active-tab').style.display = 'none';
+            const targetTab = document.getElementById(tab.dataset.tab);
+            targetTab.classList.add('active-tab');
+            targetTab.style.display = 'block';
+        });
+    });
+};
 
-        prices['otros-mensualidad'] = {
-            'pequeño': { min: parseNumber(document.getElementById('other-small-min').value), max: parseNumber(document.getElementById('other-small-max').value), mes: parseNumber(document.getElementById('other-small-default').value) },
-            'mediano': { min: parseNumber(document.getElementById('other-medium-min').value), max: parseNumber(document.getElementById('other-medium-max').value), mes: parseNumber(document.getElementById('other-medium-default').value) },
-            'grande': { min: parseNumber(document.getElementById('other-large-min').value), max: parseNumber(document.getElementById('other-large-max').value), mes: parseNumber(document.getElementById('other-large-default').value) }
-        };
-        
-        prices['otros-noche'] = {
-            'pequeño': { min: parseNumber(document.getElementById('other-night-small-min').value), max: parseNumber(document.getElementById('other-night-small-max').value), noche: parseNumber(document.getElementById('other-night-small-default').value) },
-            'mediano': { min: parseNumber(document.getElementById('other-night-medium-min').value), max: parseNumber(document.getElementById('other-night-medium-max').value), noche: parseNumber(document.getElementById('other-night-medium-default').value) },
-            'grande': { min: parseNumber(document.getElementById('other-night-large-min').value), max: parseNumber(document.getElementById('other-night-large-max').value), noche: parseNumber(document.getElementById('other-night-large-default').value) }
-        };
+/**
+ * Maneja el cierre de sesión del usuario.
+ */
+const handleLogout = () => {
+    currentUser = null;
+    toggleElementVisibility(mainApp, false);
+    toggleElementVisibility(loginSection, true);
+    toggleElementVisibility(btnLogin, true);
+    toggleElementVisibility(btnLogout, false);
+    loginForm.reset();
+};
 
-        localStorage.setItem('parkingPrices', JSON.stringify(prices));
+// =====================================================================================================================
+// Lógica de Firestore
+// =====================================================================================================================
+
+/**
+ * Obtiene la referencia a la colección de precios del admin.
+ * @returns {FirestoreCollection} La referencia a la colección de precios.
+ */
+const getPricesCollection = () => {
+    // La colección de precios del admin es pública para que la app pueda leerla sin autenticación avanzada
+    return collection(db, `artifacts/${appId}/public/data/admin_prices`);
+};
+
+/**
+ * Obtiene la referencia a la colección de vehículos activos.
+ * @returns {FirestoreCollection} La referencia a la colección de vehículos activos.
+ */
+const getActiveVehiclesCollection = () => {
+    return collection(db, `artifacts/${appId}/public/data/active_vehicles`);
+};
+
+/**
+ * Carga las tarifas del administrador desde Firestore.
+ * Si no hay tarifas, guarda las predeterminadas.
+ */
+const loadAdminPrices = async () => {
+    try {
+        const pricesColRef = getPricesCollection();
+        const pricesQuery = query(pricesColRef, where('documentId', '==', 'default-prices'));
+        const querySnapshot = await getDocs(pricesQuery);
+
+        if (querySnapshot.empty) {
+            console.log("No hay tarifas de administrador. Guardando tarifas predeterminadas.");
+            const defaultPrices = {
+                'car-half-hour': 3000,
+                'car-hour': 6000,
+                'bike-half-hour': 2000,
+                'bike-hour': 4000,
+                'car-12h': 30000,
+                'bike-12h': 15000,
+                'car-month': 250000,
+                'bike-month': 150000,
+                'other-small-min': 100000,
+                'other-small-max': 150000,
+                'other-small-default': 120000,
+                'other-medium-min': 151000,
+                'other-medium-max': 200000,
+                'other-medium-default': 180000,
+                'other-large-min': 201000,
+                'other-large-max': 300000,
+                'other-large-default': 250000,
+                'other-night-small-min': 10000,
+                'other-night-small-max': 15000,
+                'other-night-small-default': 12000,
+                'other-night-medium-min': 15100,
+                'other-night-medium-max': 20000,
+                'other-night-medium-default': 18000,
+                'other-night-large-min': 20100,
+                'other-night-large-max': 30000,
+                'other-night-large-default': 25000,
+                'documentId': 'default-prices'
+            };
+            await addDoc(pricesColRef, defaultPrices);
+            currentPrices = defaultPrices;
+        } else {
+            const pricesDoc = querySnapshot.docs[0];
+            currentPrices = pricesDoc.data();
+        }
+        updateAdminPanelInputs();
+        updateEntryFormOptions();
+    } catch (e) {
+        console.error("Error al cargar o guardar precios: ", e);
+        showNotification("Error al cargar las tarifas. Por favor, intente de nuevo más tarde.", "error");
+    }
+};
+
+/**
+ * Actualiza los valores de los inputs del panel de administración con los precios cargados.
+ */
+const updateAdminPanelInputs = () => {
+    for (const key in currentPrices) {
+        const input = document.getElementById(key);
+        if (input) {
+            input.value = currentPrices[key];
+        }
+    }
+};
+
+/**
+ * Actualiza las opciones del formulario de entrada con los precios de 12 horas.
+ */
+const updateEntryFormOptions = () => {
+    // Limpiamos las opciones dinámicas si existen
+    const dynamicOptions = entryTypeSelect.querySelectorAll('.dynamic-option');
+    dynamicOptions.forEach(opt => opt.remove());
+
+    // Obtenemos los precios de 12 horas del objeto de precios
+    const car12hPrice = currentPrices['car-12h'];
+    const bike12hPrice = currentPrices['bike-12h'];
+
+    // Agregamos las nuevas opciones con el valor concatenado
+    if (car12hPrice) {
+        const option = document.createElement('option');
+        option.value = 'carro-12h';
+        option.className = 'dynamic-option';
+        option.textContent = `Carro (por 12 horas) - $${formatNumber(car12hPrice)} COP`;
+        entryTypeSelect.add(option, entryTypeSelect.options[2]); // Inserta antes de mensualidad
+    }
+    if (bike12hPrice) {
+        const option = document.createElement('option');
+        option.value = 'moto-12h';
+        option.className = 'dynamic-option';
+        option.textContent = `Moto (por 12 horas) - $${formatNumber(bike12hPrice)} COP`;
+        entryTypeSelect.add(option, entryTypeSelect.options[4]); // Inserta antes de moto-mensualidad
+    }
+};
+
+/**
+ * Guarda las tarifas del administrador en Firestore.
+ * @param {Event} e El evento del clic.
+ */
+const handleSavePrices = async (e) => {
+    e.preventDefault();
+    try {
+        const pricesColRef = getPricesCollection();
+        const pricesQuery = query(pricesColRef, where('documentId', '==', 'default-prices'));
+        const querySnapshot = await getDocs(pricesQuery);
+
+        if (querySnapshot.empty) {
+            showNotification('No se encontró el documento de precios para actualizar.', 'error');
+            return;
+        }
+        
+        const pricesDocRef = querySnapshot.docs[0].ref;
+        const updatedPrices = {};
+        const inputs = document.querySelectorAll('#admin-panel input');
+        inputs.forEach(input => {
+            updatedPrices[input.id] = parseInt(input.value, 10);
+        });
+
+        currentPrices = { ...currentPrices, ...updatedPrices };
+        await setDoc(pricesDocRef, currentPrices);
+        
+        updateEntryFormOptions();
         showNotification('Tarifas actualizadas correctamente.', 'success');
-        
-        loadData();
+    } catch (e) {
+        console.error("Error al guardar precios: ", e);
+        showNotification("Error al guardar las tarifas.", "error");
+    }
+};
+
+/**
+ * Escucha en tiempo real los cambios en la colección de vehículos activos.
+ */
+const setupRealtimeListener = () => {
+    const activeVehiclesColRef = getActiveVehiclesCollection();
+    onSnapshot(activeVehiclesColRef, (querySnapshot) => {
+        activeVehicles = querySnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+        displayActiveVehicles(activeVehicles);
+    }, (error) => {
+        console.error("Error al escuchar cambios en la colección de vehículos: ", error);
+        showNotification("Error de conexión con la base de datos.", "error");
+    });
+};
+
+// =====================================================================================================================
+// Lógica de Vehículos Activos
+// =====================================================================================================================
+
+/**
+ * Muestra la lista de vehículos activos en el DOM.
+ * @param {Array<Object>} vehicles La lista de vehículos a mostrar.
+ */
+const displayActiveVehicles = (vehicles) => {
+    activeVehiclesList.innerHTML = '';
+    if (vehicles.length === 0) {
+        activeVehiclesList.innerHTML = '<li class="empty-list">No hay vehículos registrados.</li>';
+        return;
+    }
+    vehicles.forEach(vehicle => {
+        const li = document.createElement('li');
+        li.className = 'vehicle-item fade-in';
+        const formattedEntryTime = new Date(vehicle.entryTime).toLocaleString('es-CO');
+        li.innerHTML = `
+            <div class="vehicle-info">
+                <strong>Placa:</strong> ${vehicle.plate}
+                <span class="vehicle-type">${vehicle.type}</span>
+                <p><strong>Entrada:</strong> ${formattedEntryTime}</p>
+                <p><strong>Usuario ID:</strong> ${vehicle.userId}</p>
+            </div>
+            <button class="remove-vehicle-btn" data-id="${vehicle.id}"><i class="fas fa-trash-alt"></i></button>
+        `;
+        activeVehiclesList.appendChild(li);
     });
 
-    // Mostrar/ocultar campos de otros vehículos y cambiar placeholder
-    vehicleTypeEntry.addEventListener('change', () => {
-        const selectedType = vehicleTypeEntry.value;
-        if (selectedType === 'otros-mensualidad' || selectedType === 'otros-noche') {
-            othersTypeContainer.style.display = 'flex';
-            plateLabel.textContent = "Descripción:";
-            plateEntryInput.placeholder = "Ej: Puesto de comida, Carro de helados";
-            if (selectedType === 'otros-mensualidad') {
-                otherPriceLabel.textContent = "Precio (Mensualidad):";
-                othersMonthlyPrice.placeholder = "Precio acordado";
-            } else {
-                otherPriceLabel.textContent = "Precio (Por Noche):";
-                othersMonthlyPrice.placeholder = "Precio acordado";
+    // Agregar listener para el botón de eliminar
+    document.querySelectorAll('.remove-vehicle-btn').forEach(button => {
+        button.addEventListener('click', async (e) => {
+            const vehicleId = e.currentTarget.dataset.id;
+            const confirmed = window.confirm("¿Está seguro que desea eliminar este vehículo? Esto no generará un recibo.");
+            if (confirmed) {
+                await deleteVehicle(vehicleId);
             }
-        } else {
-            othersTypeContainer.style.display = 'none';
-            plateLabel.textContent = "Placa:";
-            plateEntryInput.placeholder = "Ej: ABC-123";
-        }
+        });
     });
+};
 
-    // Registrar entrada de vehículo
-    entryForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const plate = document.getElementById('plate-entry').value.trim().toUpperCase();
-        const type = document.getElementById('type-entry').value;
+/**
+ * Filtra los vehículos activos según el tipo.
+ * @param {string} filterType El tipo de vehículo para filtrar.
+ */
+const filterVehicles = (filterType) => {
+    let filteredList = activeVehicles;
+    if (filterType !== 'all') {
+        filteredList = activeVehicles.filter(v => v.type === filterType);
+    }
+    displayActiveVehicles(filteredList);
+};
 
-        let description = '';
-        if (['otros-mensualidad', 'otros-noche'].includes(type)) {
-            description = plate;
-        }
+/**
+ * Busca vehículos por placa o descripción.
+ * @param {string} searchTerm El término de búsqueda.
+ */
+const searchVehicles = (searchTerm) => {
+    const normalizedTerm = searchTerm.toLowerCase();
+    const searchResults = activeVehicles.filter(v => 
+        v.plate.toLowerCase().includes(normalizedTerm) ||
+        v.type.toLowerCase().includes(normalizedTerm)
+    );
+    displayActiveVehicles(searchResults);
+};
 
-        // --- VERIFICA SI EL VEHÍCULO YA EXISTE EN FIRESTORE ---
-        const q = query(collection(window.db, 'activeVehicles'), where("plate", "==", plate));
-        const querySnapshot = await getDocs(q);
-        if (!querySnapshot.empty && !['otros-mensualidad', 'otros-noche'].includes(type)) {
-            showNotification(`¡La placa ${plate} ya se encuentra registrada!`, 'error');
-            return;
-        }
+// =====================================================================================================================
+// Lógica de Registro de Entrada
+// =====================================================================================================================
 
-        let otherVehicleSize = null;
-        let otherPrice = null;
+/**
+ * Maneja el registro de entrada de un vehículo.
+ * @param {Event} e El evento de envío del formulario.
+ */
+const handleEntry = async (e) => {
+    e.preventDefault();
+    const plate = entryForm['plate-entry'].value.trim().toUpperCase();
+    const type = entryForm['type-entry'].value;
+    const entryTime = new Date().getTime();
+    
+    // Validar si la placa ya existe
+    const vehicleQuery = query(getActiveVehiclesCollection(), where("plate", "==", plate));
+    const querySnapshot = await getDocs(vehicleQuery);
+    if (!querySnapshot.empty) {
+        showNotification(`El vehículo con placa ${plate} ya está registrado.`, 'error');
+        return;
+    }
 
-        if (type === 'otros-mensualidad' || type === 'otros-noche') {
-            otherVehicleSize = othersVehicleSize.value;
-            const priceValue = othersMonthlyPrice.value;
-            if (!priceValue) {
-                showNotification("Por favor, ingrese un precio para el vehículo.", 'error');
-                return;
-            }
-            otherPrice = parseNumber(priceValue);
-            
-            const sizePrices = prices[type][otherVehicleSize];
-            if (otherPrice < sizePrices.min || otherPrice > sizePrices.max) {
-                showNotification(`El precio debe estar entre $${formatNumber(sizePrices.min)} y $${formatNumber(sizePrices.max)} COP.`, 'error');
-                return;
-            }
-        }
-
-        const newVehicle = {
-            plate,
-            description,
-            type,
-            entryTime: new Date().toISOString(),
-            price: otherPrice,
-            size: otherVehicleSize
-        };
-        
-        // --- AGREGA EL DOCUMENTO A LA COLECCIÓN 'activeVehicles' EN FIRESTORE ---
-        try {
-            const docRef = await addDoc(collection(window.db, 'activeVehicles'), newVehicle);
-            showNotification(`Entrada de ${type} con placa ${plate} registrada.`, 'success');
-            entryForm.reset();
-            othersTypeContainer.style.display = 'none';
-            await loadData();
-        } catch (e) {
-            console.error("Error al añadir documento: ", e);
-            showNotification("Error al registrar el vehículo. Por favor, intente de nuevo.", 'error');
-        }
-    });
-
-    // Controlar visibilidad de la sección de cliente especial
-    let currentCalculatedCost = 0;
-    document.getElementById('plate-exit').addEventListener('input', () => {
-        const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
-        const vehicle = activeVehicles.find(v => v.plate === plate);
-        if (vehicle && !['mensualidad', 'moto-mensualidad', 'otros-mensualidad', 'otros-noche'].includes(vehicle.type)) {
-            specialClientSection.style.display = 'flex';
-        } else {
-            specialClientSection.style.display = 'none';
-            specialClientCheckbox.checked = false;
-        }
-    });
-
-    // Calcular costo en tiempo real con ajustes de cliente especial
-    const updateCalculatedCost = () => {
-        const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
-        const vehicle = activeVehicles.find(v => v.plate === plate);
-        if (!vehicle || ['mensualidad', 'moto-mensualidad', 'otros-mensualidad', 'otros-noche'].includes(vehicle.type)) {
-            exitCostDisplay.innerHTML = '';
-            specialClientSection.style.display = 'none';
-            return;
-        }
-
-        const exitTime = new Date();
-        const entryTime = new Date(vehicle.entryTime);
-        const diffInMs = exitTime - entryTime;
-        const diffInMinutes = Math.round(diffInMs / (1000 * 60));
-
-        let totalCost = 0;
-        
-
-        if (diffInMinutes <= 30) {
-            totalCost = 0;
-        } else if (diffInMinutes > 30 && diffInMinute <= 60) {
-            totalCost = prices[vehicle.type].mediaHora;
-        } else {
-            const vehicleType = vehicle.type;
-            const pricePerHour = prices[vehicleType].hora;
-            const priceFor12Hours = prices[vehicleType].doceHoras;
-            
-            const totalHours = Math.ceil(diffInMinutes / 60);
-            totalCost = totalHours * pricePerHour;
-            
-            if (diffInMinutes >= 720) {
-                totalCost = priceFor12Hours;
-            }
-        }
-        
-        let originalCost = totalCost;
-
-        if (specialClientCheckbox.checked) {
-            const adjustmentValue = parseNumber(specialClientAdjustment.value) || 0;
-            totalCost = originalCost + adjustmentValue;
-            if (adjustmentValue < 0) {
-                showNotification(`Descuento de $${formatNumber(Math.abs(adjustmentValue))} COP aplicado.`, 'info');
-            } else if (adjustmentValue > 0) {
-                showNotification(`Aumento de $${formatNumber(adjustmentValue)} COP aplicado.`, 'info');
-            }
-        } else {
-            notificationArea.style.display = 'none';
-        }
-
-        currentCalculatedCost = totalCost;
-        exitCostDisplay.innerHTML = `Total a Pagar: <strong>$${formatNumber(totalCost)} COP</strong>`;
+    const newVehicle = {
+        plate,
+        type,
+        entryTime,
+        userId: currentUser ? currentUser.uid : 'sin-usuario'
     };
 
-    specialClientCheckbox.addEventListener('change', updateCalculatedCost);
-    specialClientAdjustment.addEventListener('input', updateCalculatedCost);
+    if (type === 'otros-mensualidad' || type === 'otros-noche') {
+        newVehicle.size = othersTypeContainer.querySelector('#others-vehicle-size').value;
+        newVehicle.agreedPrice = parseFloat(othersTypeContainer.querySelector('#others-monthly-price').value);
+    }
+    
+    try {
+        await addDoc(getActiveVehiclesCollection(), newVehicle);
+        showNotification(`Entrada registrada para el vehículo ${plate}.`, 'success');
+        entryForm.reset();
+    } catch (error) {
+        console.error("Error al registrar entrada: ", error);
+        showNotification("Error al registrar entrada. Por favor, intente de nuevo.", 'error');
+    }
+};
 
-    document.getElementById('plate-exit').addEventListener('input', updateCalculatedCost);
+// =====================================================================================================================
+// Lógica de Cálculo de Costos y Salida
+// =====================================================================================================================
 
-    // Registrar salida y calcular costo
-    exitForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const plate = document.getElementById('plate-exit').value.trim().toUpperCase();
-        const vehicle = activeVehicles.find(v => v.plate === plate || v.description === plate);
+/**
+ * Calcula el costo de la estadía de un vehículo.
+ * Implementa la lógica de cobro por media hora.
+ * @param {Object} vehicle El objeto del vehículo.
+ * @param {number} exitTime El tiempo de salida en milisegundos.
+ * @returns {Object} Un objeto con el costo final, original y el tiempo de estadía.
+ */
+const calculateCost = (vehicle, exitTime) => {
+    const durationMs = exitTime - vehicle.entryTime;
+    const durationMinutes = Math.ceil(durationMs / (1000 * 60));
+    const durationHours = durationMinutes / 60;
+    
+    let baseCost = 0;
+    let timeUnit = '';
+    let isFlatRate = false;
 
-        if (!vehicle) {
-            showNotification('Placa/Descripción no encontrada. Por favor, verifique e intente de nuevo.', 'error');
+    // Lógica para cobro por media hora (múltiplos de la tarifa de media hora)
+    const calculateHourlyCost = (halfHourPrice) => {
+        // Se cobra por cada bloque de 30 minutos o fracción.
+        // Math.ceil(durationMinutes / 30) nos da el número de bloques de 30 minutos a cobrar.
+        const halfHourBlocks = Math.ceil(durationMinutes / 30);
+        return halfHourPrice * halfHourBlocks;
+    };
+
+    switch (vehicle.type) {
+        case 'carro':
+            baseCost = calculateHourlyCost(currentPrices['car-half-hour']);
+            timeUnit = ' (Por Hora)';
+            break;
+        case 'moto':
+            baseCost = calculateHourlyCost(currentPrices['bike-half-hour']);
+            timeUnit = ' (Por Hora)';
+            break;
+        case 'carro-12h':
+            baseCost = currentPrices['car-12h'];
+            timeUnit = ' (Tarifa Plana 12h)';
+            isFlatRate = true;
+            break;
+        case 'moto-12h':
+            baseCost = currentPrices['bike-12h'];
+            timeUnit = ' (Tarifa Plana 12h)';
+            isFlatRate = true;
+            break;
+        case 'mensualidad':
+            baseCost = currentPrices['car-month'];
+            timeUnit = ' (Mensualidad)';
+            isFlatRate = true;
+            break;
+        case 'moto-mensualidad':
+            baseCost = currentPrices['bike-month'];
+            timeUnit = ' (Mensualidad)';
+            isFlatRate = true;
+            break;
+        case 'otros-mensualidad':
+            baseCost = vehicle.agreedPrice;
+            timeUnit = ` (Mensualidad - ${vehicle.size})`;
+            isFlatRate = true;
+            break;
+        case 'otros-noche':
+            baseCost = vehicle.agreedPrice;
+            timeUnit = ` (Por Noche - ${vehicle.size})`;
+            isFlatRate = true;
+            break;
+        default:
+            baseCost = 0;
+            timeUnit = '';
+            break;
+    }
+
+    const hours = Math.floor(durationHours);
+    const minutes = Math.floor(durationMinutes % 60);
+
+    const timeString = `${hours}h ${minutes}m`;
+    
+    return {
+        costoOriginal: baseCost,
+        tiempoEstadia: timeString,
+        isFlatRate: isFlatRate
+    };
+};
+
+/**
+ * Maneja el registro de salida y cálculo de costos.
+ * @param {Event} e El evento de envío del formulario.
+ */
+const handleExit = async (e) => {
+    e.preventDefault();
+    const plate = exitForm['plate-exit'].value.trim().toUpperCase();
+    const specialClientAdjustment = parseFloat(exitForm['special-client-adjustment'].value) || 0;
+
+    try {
+        const vehiclesColRef = getActiveVehiclesCollection();
+        const vehicleQuery = query(vehiclesColRef, where("plate", "==", plate));
+        const querySnapshot = await getDocs(vehicleQuery);
+
+        if (querySnapshot.empty) {
+            showNotification(`No se encontró un vehículo con placa ${plate}.`, 'error');
             return;
         }
 
-        const exitTime = new Date();
-        const entryTime = new Date(vehicle.entryTime);
-        const diffInMs = exitTime - entryTime;
-        const diffInMinutes = Math.round(diffInMs / (1000 * 60));
+        const vehicleDoc = querySnapshot.docs[0];
+        const vehicleData = vehicleDoc.data();
+        const exitTime = new Date().getTime();
         
-        let totalCost = 0;
-        let originalCost = 0;
-        const isSpecialClient = specialClientCheckbox.checked;
-        const adjustmentValue = parseNumber(specialClientAdjustment.value) || 0;
+        const costData = calculateCost(vehicleData, exitTime);
+        let finalCost = costData.costoOriginal;
 
-        let resultHTML = '';
-        let receiptData = {};
-        let displayPlate = vehicle.plate;
-        if (vehicle.type.includes('otros')) {
-            displayPlate = vehicle.description;
+        if (specialClientCheckbox.checked) {
+            finalCost += specialClientAdjustment;
         }
 
+        // Display results
+        const receiptData = {
+            plate: vehicleData.plate,
+            type: vehicleData.type,
+            entryTime: new Date(vehicleData.entryTime).toLocaleString('es-CO'),
+            exitTime: new Date(exitTime).toLocaleString('es-CO'),
+            tiempoEstadia: costData.tiempoEstadia,
+            costoOriginal: costData.costoOriginal,
+            ajusteEspecial: specialClientCheckbox.checked ? specialClientAdjustment : 0,
+            costoFinal: Math.max(0, finalCost),
+            isFlatRate: costData.isFlatRate
+        };
 
-        if (['mensualidad', 'moto-mensualidad', 'otros-mensualidad'].includes(vehicle.type)) {
-            let monthlyPrice = 0;
-            if (vehicle.type === 'mensualidad') {
-                monthlyPrice = prices.carro.mes;
-            } else if (vehicle.type === 'moto-mensualidad') {
-                monthlyPrice = prices.moto.mes;
-            } else {
-                monthlyPrice = vehicle.price;
-            }
+        displayResult(receiptData);
 
-            const nextPaymentDate = new Date(vehicle.entryTime);
-            nextPaymentDate.setMonth(nextPaymentDate.getMonth() + 1);
-
-            resultHTML = `
-                <p>Placa/Descripción: <strong>${displayPlate}</strong></p>
-                <p>Tipo: <strong>${vehicle.type}</strong></p>
-                <p>Valor mensualidad: <strong>$${formatNumber(monthlyPrice)} COP</strong></p>
-                <p>Día de pago próximo: <strong>${nextPaymentDate.toLocaleDateString('es-CO')}</strong></p>
-                <p class="info-message"><strong>Salida registrada. No se aplica cargo por hora.</strong></p>
-            `;
-            totalCost = 0;
-            
-            receiptData = {
-                plate: displayPlate,
-                type: vehicle.type,
-                entryTime,
-                exitTime,
-                costoFinal: 0,
-                descuento: 0,
-                esMensualidad: true,
-                costoOriginal: monthlyPrice,
-                proximoPago: nextPaymentDate
-            };
-        } else if (vehicle.type === 'otros-noche') {
-            const nightPrice = vehicle.price;
-            resultHTML = `
-                <p>Descripción: <strong>${displayPlate}</strong></p>
-                <p>Tipo: <strong>${vehicle.type}</strong></p>
-                <p>Valor por noche: <strong>$${formatNumber(nightPrice)} COP</strong></p>
-                <p class="info-message"><strong>Salida registrada. Tarifa plana nocturna.</strong></p>
-            `;
-            totalCost = nightPrice;
-            
-            receiptData = {
-                plate: displayPlate,
-                type: vehicle.type,
-                entryTime,
-                exitTime,
-                costoFinal: totalCost,
-                esGratis: false,
-                esMensualidad: false,
-                esNoche: true,
-                costoOriginal: nightPrice
-            };
-
-        } else { // Carros y Motos por hora
-            if (diffInMinutes <= 30) {
-                totalCost = 0;
-                resultHTML = `
-                    <p>Placa: <strong>${vehicle.plate}</strong></p>
-                    <p>Tipo: <strong>${vehicle.type}</strong></p>
-                    <p>Tiempo de estadía: <strong>${diffInMinutes} minutos</strong></p>
-                    <p class="info-message">El vehículo no ha superado la media hora de estadía.</p>
-                    <p>Total a pagar: <strong>$0 COP</strong></p>
-                `;
-                
-                receiptData = {
-                    plate: vehicle.plate,
-                    type: vehicle.type,
-                    entryTime,
-                    exitTime,
-                    costoFinal: 0,
-                    descuento: 0,
-                    esGratis: true,
-                    tiempoEstadia: `${diffInMinutes} minutos`
-                };
-
-            } else {
-                const vehicleType = vehicle.type;
-
-                // Nuevo cálculo de costo: primero media hora, luego horas completas
-                if (diffInMinutes <= 60) {
-                    totalCost = prices[vehicleType].mediaHora;
-                } else {
-                    const totalHours = Math.ceil(diffInMinutes / 60);
-                    totalCost = totalHours * prices[vehicleType].hora;
-                }
-                
-                if (diffInMinutes >= 720) {
-                    totalCost = prices[vehicleType].doceHoras;
-                }
-                
-                originalCost = totalCost;
-                
-                if (isSpecialClient) {
-                    totalCost = originalCost + adjustmentValue;
-                }
-
-                const totalHoursDisplay = Math.floor(diffInMinutes / 60);
-                const totalMinutesDisplay = diffInMinutes % 60;
-
-                resultHTML = `
-                    <p>Placa: <strong>${vehicle.plate}</strong></p>
-                    <p>Tipo: <strong>${vehicle.type}</strong></p>
-                    <p>Tiempo de estadía: <strong>${totalHoursDisplay} horas y ${totalMinutesDisplay} minutos</strong></p>
-                    <p>Costo calculado (sin ajuste): <strong>$${formatNumber(originalCost)} COP</strong></p>
-                `;
-                
-                if (isSpecialClient) {
-                    resultHTML += `<p>Ajuste por cliente especial: <strong>${adjustmentValue >= 0 ? '+' : ''}$${formatNumber(adjustmentValue)} COP</strong></p>`;
-                }
-                
-                resultHTML += `<p>Total a pagar: <strong>$${formatNumber(totalCost)} COP</strong></p>`;
-
-                receiptData = {
-                    plate: vehicle.plate,
-                    type: vehicle.type,
-                    entryTime,
-                    exitTime,
-                    costoFinal: totalCost,
-                    descuento: adjustmentValue < 0 ? Math.abs(adjustmentValue) : 0,
-                    esGratis: false,
-                    esMensualidad: false,
-                    costoOriginal: originalCost,
-                    ajusteEspecial: adjustmentValue,
-                    tiempoEstadia: `${totalHoursDisplay} horas y ${totalMinutesDisplay} minutos`
-                };
-            }
-        }
-
-        resultContent.innerHTML = resultHTML;
-        resultDiv.style.display = 'block';
-        resultDiv.classList.add('fade-in');
-
-        // --- ELIMINA EL DOCUMENTO DE FIRESTORE ---
-        try {
-            await deleteDoc(doc(window.db, "activeVehicles", vehicle.id));
-            showNotification(`Salida de ${displayPlate} registrada.`, 'success');
-            await loadData(); // Recarga la lista de vehículos desde Firestore
-        } catch (e) {
-            console.error("Error al eliminar documento: ", e);
-            showNotification("Error al registrar la salida. Por favor, intente de nuevo.", 'error');
-        }
-
-        exitForm.reset();
-        specialClientCheckbox.checked = false;
-        specialClientSection.style.display = 'none';
-        specialClientAdjustment.value = '';
-        exitCostDisplay.innerHTML = '';
-
-        localStorage.setItem('lastReceipt', JSON.stringify(receiptData));
-    });
-
-    // Descargar recibo de pago en PDF
-    printReceiptBtn.addEventListener('click', () => {
-        const receiptData = JSON.parse(localStorage.getItem('lastReceipt'));
-        if (!receiptData) {
-            showNotification('No hay un recibo para descargar. Finalice una salida primero.', 'info');
-            return;
-        }
-
-        const doc = new jsPDF();
-        doc.setFont('helvetica');
-        doc.setTextColor(44, 62, 80);
-
-        doc.setFontSize(22);
-        doc.text('Parqueadero El Reloj', 105, 20, null, null, 'center');
-        doc.setFontSize(16);
-
-        if (receiptData.esGratis) {
-            doc.text('Salida Gratis', 105, 30, null, null, 'center');
-        } else {
-            doc.text('Recibo de Pago', 105, 30, null, null, 'center');
-        }
+        // Almacenar los datos del recibo para el botón de impresión
+        printReceiptBtn.onclick = () => generatePDF(receiptData);
         
-        doc.setDrawColor(200, 200, 200);
-        doc.line(20, 35, 190, 35);
+        // Eliminar el vehículo de la base de datos solo si el cálculo fue exitoso
+        await deleteDoc(doc(vehiclesColRef, vehicleDoc.id));
+        showNotification(`Salida procesada para el vehículo ${plate}.`, 'success');
 
-        let y = 45;
-        doc.setFontSize(12);
-        doc.setTextColor(52, 73, 94);
+    } catch (error) {
+        console.error("Error al procesar la salida: ", error);
+        showNotification("Error al procesar la salida. Por favor, intente de nuevo.", 'error');
+    }
+};
 
-        if (receiptData.esNoche || receiptData.esMensualidad) {
-            doc.text(`Descripción: ${receiptData.plate}`, 20, y);
-            y += 7;
-        } else {
-            doc.text(`Placa: ${receiptData.plate}`, 20, y);
-            y += 7;
-        }
-        
-        doc.text(`Tipo de Vehículo: ${receiptData.type.replace('-', ' ').toUpperCase()}`, 20, y);
-        y += 10;
-        doc.text(`Fecha de Entrada: ${new Date(receiptData.entryTime).toLocaleString('es-CO')}`, 20, y);
-        y += 7;
-        doc.text(`Fecha de Salida: ${new Date(receiptData.exitTime).toLocaleString('es-CO')}`, 20, y);
-        y += 10;
-        
-        if (receiptData.esGratis) {
-            doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
-            y += 10;
-            doc.setFontSize(14);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(231, 76, 60); 
-            doc.text('NO COMPLETÓ LA MEDIA HORA', 105, y, null, null, 'center');
-            y += 7;
-            doc.text('SU SALIDA ES GRATIS', 105, y, null, null, 'center');
-            y += 10;
-            doc.setFontSize(16);
-            doc.text('TOTAL A PAGAR: $0 COP', 105, y, null, null, 'center');
-            y += 20;
-        } else if (receiptData.esMensualidad) {
-            doc.text(`Tipo de Servicio: Mensualidad`, 20, y);
-            y += 7;
-            doc.text(`Valor Mensualidad: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
-            y += 7;
-            doc.text(`Próximo Día de Pago: ${new Date(receiptData.proximoPago).toLocaleDateString('es-CO')}`, 20, y);
-            y += 10;
-            doc.setFontSize(14);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(52, 152, 219);
-            doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
-            y += 20;
-        } else if (receiptData.esNoche) {
-             doc.text(`Tarifa Plana por Noche: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
-            y += 10;
-            doc.setFontSize(14);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(52, 152, 219);
-            doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
-            y += 20;
-        } else {
-            doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
-            y += 7;
-            doc.text(`Costo Original: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
-            y += 7;
-            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
-            y += 10;
-            doc.setFontSize(14);
-            doc.setFont('helvetica', 'bold');
-            doc.setTextColor(52, 152, 219);
-            doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
-            y += 20;
-        }
+/**
+ * Elimina un vehículo de la base de datos sin generar recibo.
+ * @param {string} vehicleId El ID del documento del vehículo a eliminar.
+ */
+const deleteVehicle = async (vehicleId) => {
+    try {
+        const vehiclesColRef = getActiveVehiclesCollection();
+        await deleteDoc(doc(vehiclesColRef, vehicleId));
+        showNotification("Vehículo eliminado correctamente.", "success");
+    } catch (error) {
+        console.error("Error al eliminar el vehículo: ", error);
+        showNotification("Error al eliminar el vehículo.", "error");
+    }
+};
 
-        doc.setFontSize(10);
+/**
+ * Muestra los detalles de la salida en el DOM.
+ * @param {Object} receiptData Los datos del recibo a mostrar.
+ */
+const displayResult = (receiptData) => {
+    resultDiv.style.display = 'block';
+    const content = `
+        <p><strong>Placa:</strong> ${receiptData.plate}</p>
+        <p><strong>Tipo:</strong> ${receiptData.type}</p>
+        <p><strong>Entrada:</strong> ${receiptData.entryTime}</p>
+        <p><strong>Salida:</strong> ${receiptData.exitTime}</p>
+        <p><strong>Tiempo de Estadía:</strong> ${receiptData.tiempoEstadia}</p>
+        ${!receiptData.isFlatRate ? `<p><strong>Costo Original:</strong> $${formatNumber(receiptData.costoOriginal)} COP</p>` : ''}
+        ${receiptData.ajusteEspecial !== 0 ? `<p><strong>Ajuste Especial:</strong> ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP</p>` : ''}
+        <h3>TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP</h3>
+    `;
+    resultContent.innerHTML = content;
+};
+
+// =====================================================================================================================
+// Lógica de Generación de PDF
+// =====================================================================================================================
+
+/**
+ * Genera un recibo en formato PDF.
+ * @param {Object} receiptData Los datos para el recibo.
+ */
+const generatePDF = (receiptData) => {
+    const doc = new jsPDF();
+    let y = 20;
+
+    // Título y logo
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(41, 128, 185);
+    doc.text('Recibo de Parqueadero', 105, y, null, null, 'center');
+    y += 10;
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text('Parqueadero Villa_laundrycoffee', 105, y, null, null, 'center');
+    y += 5;
+    doc.text(`Fecha de Impresión: ${new Date().toLocaleDateString('es-CO')}`, 105, y, null, null, 'center');
+    y += 15;
+
+    // Información del vehículo
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(51, 51, 51);
+    doc.text('Información del Vehículo', 20, y);
+    y += 7;
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Placa: ${receiptData.plate}`, 20, y);
+    y += 7;
+    doc.text(`Tipo: ${receiptData.type}`, 20, y);
+    y += 10;
+
+    // Detalles de la estadía
+    doc.setFont('helvetica', 'bold');
+    doc.text('Detalles de la Estadía', 20, y);
+    y += 7;
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Entrada: ${receiptData.entryTime}`, 20, y);
+    y += 7;
+    doc.text(`Salida: ${receiptData.exitTime}`, 20, y);
+    y += 7;
+
+    // Resumen de costos
+    doc.setFont('helvetica', 'bold');
+    doc.text('Resumen de Costos', 20, y);
+    y += 7;
+
+    if (receiptData.isFlatRate) {
         doc.setFont('helvetica', 'normal');
-        doc.setTextColor(100, 100, 100);
-        doc.text('¡Gracias por su visita!', 105, y, null, null, 'center');
+        doc.text(`Tarifa Plana: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
+        y += 7;
+        doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
+        y += 7;
+        if (receiptData.ajusteEspecial !== 0) {
+            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
+            y += 7;
+        }
         y += 5;
-        doc.text('Medellín, Antioquia, Colombia', 105, y, null, null, 'center');
+    } else {
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Tiempo de Estadía: ${receiptData.tiempoEstadia}`, 20, y);
+        y += 7;
+        doc.text(`Costo Original: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
+        y += 7;
+        if (receiptData.ajusteEspecial !== 0) {
+            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
+            y += 7;
+        }
+    }
 
-        doc.save(`Recibo_Parqueadero_${receiptData.plate}.pdf`);
-        showNotification('Recibo PDF generado con éxito.', 'success');
+    // Costo total
+    y += 5;
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(52, 152, 219);
+    doc.text(`TOTAL A PAGAR: $${formatNumber(receiptData.costoFinal)} COP`, 20, y);
+    y += 20;
+
+    // Pie de página
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    doc.text('¡Gracias por su visita!', 105, y, null, null, 'center');
+    y += 5;
+    doc.text('Medellín, Antioquia, Colombia', 105, y, null, null, 'center');
+
+    doc.save(`Recibo-${receiptData.plate}.pdf`);
+};
+
+// =====================================================================================================================
+// Eventos y Inicialización
+// =====================================================================================================================
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Autenticación inicial del usuario
+    try {
+        if (initialAuthToken) {
+            await signInWithCustomToken(auth, initialAuthToken);
+            console.log("Autenticación con token inicial exitosa.");
+        } else {
+            await signInAnonymously(auth);
+            console.log("Autenticación anónima exitosa.");
+        }
+    } catch (error) {
+        console.error("Error en la autenticación: ", error);
+        showNotification("Error de autenticación. Algunas funciones pueden no estar disponibles.", "error");
+    }
+
+    // Listener para los formularios
+    loginForm.addEventListener('submit', handleLogin);
+    entryForm.addEventListener('submit', handleEntry);
+    exitForm.addEventListener('submit', handleExit);
+    
+    // Listener para los botones de la barra de navegación
+    btnLogin.addEventListener('click', () => toggleElementVisibility(loginSection, true));
+    btnLogout.addEventListener('click', handleLogout);
+
+    // Listener para el cambio de tipo de vehículo en el formulario de entrada
+    entryTypeSelect.addEventListener('change', (e) => {
+        const value = e.target.value;
+        if (value === 'otros-mensualidad' || value === 'otros-noche') {
+            toggleElementVisibility(othersTypeContainer, true);
+        } else {
+            toggleElementVisibility(othersTypeContainer, false);
+        }
     });
 
-    // Llamada inicial para cargar los datos y actualizar la lista de vehículos.
-    // Esto se hace al final para asegurar que todas las funciones ya estén definidas.
-    await loadData();
+    // Listener para el panel de administración
+    if (currentUser && currentUser.role === 'admin') {
+        savePricesBtn.addEventListener('click', handleSavePrices);
+    }
+    
+    // Listener para el filtro de vehículos
+    document.querySelectorAll('.filter-button').forEach(button => {
+        button.addEventListener('click', (e) => {
+            document.querySelector('.filter-button.active').classList.remove('active');
+            e.target.classList.add('active');
+            filterVehicles(e.target.dataset.filter);
+        });
+    });
+
+    // Listener para la búsqueda de vehículos
+    vehicleSearchInput.addEventListener('input', (e) => {
+        searchVehicles(e.target.value);
+    });
+
+    // Listener para el checkbox de cliente especial
+    specialClientCheckbox.addEventListener('change', () => {
+        const adjustmentInput = document.getElementById('special-client-adjustment');
+        if (specialClientCheckbox.checked) {
+            adjustmentInput.removeAttribute('disabled');
+        } else {
+            adjustmentInput.setAttribute('disabled', 'true');
+            adjustmentInput.value = 0;
+        }
+    });
+
+    // Carga inicial de precios y configuración de listener en tiempo real
+    await loadAdminPrices();
+    setupRealtimeListener();
 });
