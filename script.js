@@ -34,7 +34,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const plateLabel = document.getElementById('plate-label');
     const otherPriceLabel = document.getElementById('other-price-label');
 
-
     const vehicleSearchInput = document.getElementById('vehicle-search');
 
     if(vehicleSearchInput) {
@@ -74,9 +73,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             'pequeño': { min: 10000, max: 15000, noche: 12000 },
             'mediano': { min: 15100, max: 20000, noche: 18000 },
             'grande': { min: 20100, max: 30000, noche: 25000 }
+        },
+        'carro-12h': {
+            doceHoras: 30000,
+            mediaHora: 3000 // Mantener para el cálculo intermedio si es necesario
+        },
+        'moto-12h': {
+            doceHoras: 15000,
+            mediaHora: 2000 // Mantener para el cálculo intermedio si es necesario
         }
     };
-
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 // Usuarios del sistema
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 const users = {
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     'admin': 'admin123',
@@ -105,6 +111,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         if (filterType === 'otros-noche') {
             return v.type.includes('otros-noche');
+        }
+        if (filterType === '12h') {
+            return v.type.includes('12h');
         }
         return v.type === filterType;
     });
@@ -297,6 +306,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             'mediano': { min: parseNumber(document.getElementById('other-night-medium-min').value), max: parseNumber(document.getElementById('other-night-medium-max').value), noche: parseNumber(document.getElementById('other-night-medium-default').value) },
             'grande': { min: parseNumber(document.getElementById('other-night-large-min').value), max: parseNumber(document.getElementById('other-night-large-max').value), noche: parseNumber(document.getElementById('other-night-large-default').value) }
         };
+        
+        // Actualizar precios de 12h
+        prices['carro-12h'] = { doceHoras: parseNumber(document.getElementById('car-12h').value) };
+        prices['moto-12h'] = { doceHoras: parseNumber(document.getElementById('bike-12h').value) };
 
         localStorage.setItem('parkingPrices', JSON.stringify(prices));
         showNotification('Tarifas actualizadas correctamente.', 'success');
@@ -415,21 +428,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         let totalCost = 0;
         
+        const vehicleType = vehicle.type.replace('-12h', ''); // Maneja tipos 'carro' y 'moto'
 
         if (diffInMinutes <= 30) {
             totalCost = 0;
-        } else if (diffInMinutes > 30 && diffInMinute <= 60) {
-            totalCost = prices[vehicle.type].mediaHora;
         } else {
-            const vehicleType = vehicle.type;
-            const pricePerHour = prices[vehicleType].hora;
-            const priceFor12Hours = prices[vehicleType].doceHoras;
-            
-            const totalHours = Math.ceil(diffInMinutes / 60);
-            totalCost = totalHours * pricePerHour;
-            
-            if (diffInMinutes >= 720) {
-                totalCost = priceFor12Hours;
+            const mediaHoraRate = prices[vehicleType].mediaHora;
+            const twelveHourRate = prices[vehicle.type.includes('12h') ? vehicle.type : vehicleType].doceHoras;
+
+            if (diffInMinutes >= 720) { // 12 horas en minutos
+                totalCost = twelveHourRate;
+            } else {
+                const numHalfHours = Math.ceil(diffInMinutes / 30);
+                totalCost = numHalfHours * mediaHoraRate;
             }
         }
         
@@ -540,7 +551,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 costoOriginal: nightPrice
             };
 
-        } else { // Carros y Motos por hora
+        } else { // Carros y Motos por hora o 12h
             if (diffInMinutes <= 30) {
                 totalCost = 0;
                 resultHTML = `
@@ -563,18 +574,21 @@ document.addEventListener('DOMContentLoaded', async () => {
                 };
 
             } else {
-                const vehicleType = vehicle.type;
-
-                // Nuevo cálculo de costo: primero media hora, luego horas completas
-                if (diffInMinutes <= 60) {
-                    totalCost = prices[vehicleType].mediaHora;
-                } else {
-                    const totalHours = Math.ceil(diffInMinutes / 60);
-                    totalCost = totalHours * prices[vehicleType].hora;
+                const vehicleTypeBase = vehicle.type.replace('-12h', '');
+                let mediaHoraRate = prices[vehicleTypeBase].mediaHora;
+                let twelveHourRate = prices[vehicleTypeBase].doceHoras;
+                
+                if (vehicle.type.includes('12h')) {
+                    twelveHourRate = prices[vehicle.type].doceHoras;
+                    // Asegurarse de que mediaHoraRate para tipos 12h sea la misma que la base
+                    mediaHoraRate = prices[vehicleTypeBase].mediaHora;
                 }
                 
+                const totalHalfHours = Math.ceil(diffInMinutes / 30);
+                totalCost = totalHalfHours * mediaHoraRate;
+                
                 if (diffInMinutes >= 720) {
-                    totalCost = prices[vehicleType].doceHoras;
+                    totalCost = twelveHourRate;
                 }
                 
                 originalCost = totalCost;
@@ -608,6 +622,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     descuento: adjustmentValue < 0 ? Math.abs(adjustmentValue) : 0,
                     esGratis: false,
                     esMensualidad: false,
+                    esDoceHoras: vehicle.type.includes('12h'),
                     costoOriginal: originalCost,
                     ajusteEspecial: adjustmentValue,
                     tiempoEstadia: `${totalHoursDisplay} horas y ${totalMinutesDisplay} minutos`
@@ -720,8 +735,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             y += 7;
             doc.text(`Costo Original: $${formatNumber(receiptData.costoOriginal)} COP`, 20, y);
             y += 7;
-            doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
-            y += 10;
+            if (receiptData.ajusteEspecial !== 0) {
+                 doc.text(`Ajuste Especial: ${receiptData.ajusteEspecial >= 0 ? '+' : ''}$${formatNumber(receiptData.ajusteEspecial)} COP`, 20, y);
+                 y += 7;
+            }
+            if (receiptData.esDoceHoras) {
+                doc.text(`Tarifa Plana de 12 horas aplicada.`, 20, y);
+                y += 7;
+            }
+            y += 3;
             doc.setFontSize(14);
             doc.setFont('helvetica', 'bold');
             doc.setTextColor(52, 152, 219);
