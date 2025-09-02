@@ -34,6 +34,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     const plateLabel = document.getElementById('plate-label');
     const otherPriceLabel = document.getElementById('other-price-label');
 
+
+    const vehicleSearchInput = document.getElementById('vehicle-search');
+
+    if(vehicleSearchInput) {
+        vehicleSearchInput.addEventListener('input', (e) => {
+            const searchTerm = e.target.value.trim().toUpperCase();
+            if (searchTerm === '') {
+                updateActiveVehiclesList('all');
+            } else {
+                const filteredVehicles = activeVehicles.filter(vehicle => 
+                    (vehicle.plate && vehicle.plate.toUpperCase().includes(searchTerm)) ||
+                    (vehicle.description && vehicle.description.toUpperCase().includes(searchTerm))
+                );
+                updateActiveVehiclesList('all', filteredVehicles);
+            }
+        });
+    }
     // Tarifas iniciales con estructura completa
     let prices = {
         carro: {
@@ -60,11 +77,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
-    // Usuarios del sistema
-    const users = {
-        'admin': 'admin123',
-        'trabajador': 'trabajador123'
-    };
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                // Usuarios del sistema
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                const users = {
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    'admin': 'admin123',
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    'trabajador': 'trabajador123'
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                };
     
     // Declaración de la variable para vehículos activos
     let activeVehicles = [];
