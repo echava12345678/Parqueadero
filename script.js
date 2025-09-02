@@ -96,40 +96,40 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, 5000);
     };
 
-    const updateActiveVehiclesList = (filterType = 'all') => {
-        activeVehiclesList.innerHTML = '';
-        const filteredVehicles = activeVehicles.filter(v => {
-            if (filterType === 'all') return true;
-            if (filterType === 'mensualidad') {
-                return v.type.includes('mensualidad');
-            }
-            if (filterType === 'otros-noche') {
-                return v.type.includes('otros-noche');
-            }
-            return v.type === filterType;
-        });
-
-        if (filteredVehicles.length === 0) {
-            activeVehiclesList.innerHTML = '<li><i class="fas fa-info-circle"></i> No hay vehículos activos de este tipo.</li>';
-        } else {
-            filteredVehicles.forEach(v => {
-                const li = document.createElement('li');
-                let extraInfo = '';
-                let displayPlate = v.plate;
-                if (v.type.includes('mensualidad')) {
-                    const entryDate = new Date(v.entryTime);
-                    const nextPaymentDate = new Date(entryDate);
-                    nextPaymentDate.setMonth(nextPaymentDate.getMonth() + 1);
-                    extraInfo = `<br>Próximo pago: <strong>${nextPaymentDate.toLocaleDateString('es-CO')}</strong>`;
-                }
-                if (v.type.includes('otros')) {
-                    displayPlate = v.description;
-                }
-                li.innerHTML = `<span>Placa/Descripción: <strong>${displayPlate}</strong></span> <span>Tipo: ${v.type}</span> <span>Entrada: ${new Date(v.entryTime).toLocaleString()}${extraInfo}</span>`;
-                activeVehiclesList.appendChild(li);
-            });
+   const updateActiveVehiclesList = (filterType = 'all', vehicleList = null) => {
+    activeVehiclesList.innerHTML = '';
+    const vehiclesToDisplay = vehicleList || activeVehicles.filter(v => {
+        if (filterType === 'all') return true;
+        if (filterType === 'mensualidad') {
+            return v.type.includes('mensualidad');
         }
-    };
+        if (filterType === 'otros-noche') {
+            return v.type.includes('otros-noche');
+        }
+        return v.type === filterType;
+    });
+
+    if (vehiclesToDisplay.length === 0) {
+        activeVehiclesList.innerHTML = '<li><i class="fas fa-info-circle"></i> No hay vehículos activos de este tipo.</li>';
+    } else {
+        vehiclesToDisplay.forEach(v => {
+            const li = document.createElement('li');
+            let extraInfo = '';
+            let displayPlate = v.plate;
+            if (v.type.includes('mensualidad')) {
+                const entryDate = new Date(v.entryTime);
+                const nextPaymentDate = new Date(entryDate);
+                nextPaymentDate.setMonth(nextPaymentDate.getMonth() + 1);
+                extraInfo = `<br>Próximo pago: <strong>${nextPaymentDate.toLocaleDateString('es-CO')}</strong>`;
+            }
+            if (v.type.includes('otros')) {
+                displayPlate = v.description;
+            }
+            li.innerHTML = `<span>Placa/Descripción: <strong>${displayPlate}</strong></span> <span>Tipo: ${v.type}</span> <span>Entrada: ${new Date(v.entryTime).toLocaleString()}${extraInfo}</span>`;
+            activeVehiclesList.appendChild(li);
+        });
+    }
+};
 
     // Cargar tarifas y vehículos desde localStorage (manteniendo el de precios en localStorage)
     const loadData = async () => {
