@@ -666,7 +666,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         doc.setTextColor(44, 62, 80);
 
         doc.setFontSize(22);
-        doc.text('Parqueadero El Reloj', 105, 20, null, null, 'center');
+        doc.text('Parqueadero Villa_laundrycoffee', 105, 20, null, null, 'center');
         doc.setFontSize(16);
 
         if (receiptData.esGratis) {
