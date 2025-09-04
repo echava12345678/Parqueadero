@@ -418,20 +418,21 @@ footer {
     position: fixed; /* Lo fija en la pantalla, no se desplaza con el scroll */
     bottom: 20px;    /* 20px desde el borde inferior */
     right: 20px;     /* 20px desde el borde derecho */
-    background-color: #28a745; /* Un verde amigable, puedes cambiarlo */
-    color: white;    /* Texto blanco para contraste */
+    background-color: #f0f8ff; /* Un color azul muy claro (similar a un globo de chat) */
+    color: #333;     /* Color de texto más oscuro */
     padding: 15px 20px; /* Relleno interno */
     border-radius: 10px; /* Bordes redondeados */
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); /* Sombra para darle profundidad */
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Sombra más sutil */
     z-index: 1000;   /* Asegura que esté por encima de otros elementos */
     max-width: 250px; /* Ancho máximo para que no sea demasiado grande */
     text-align: center; /* Centra el texto */
     font-size: 0.9em; /* Tamaño de fuente ligeramente más pequeño */
     line-height: 1.4; /* Espaciado entre líneas */
+    border: 1px solid #cceeff; /* Un borde sutil para definir la burbuja */
 }
 
-/* Opcional: Un pequeño estilo para cuando el usuario pasa el mouse por encima */
+/* Elimina el efecto hover para que no parezca un botón */
 .floating-message-bubble:hover {
-    background-color: #218838; /* Un verde más oscuro al pasar el mouse */
-    cursor: pointer; /* Cambia el cursor para indicar que es interactivo */
+    background-color: #f0f8ff; /* Mantiene el mismo color de fondo */
+    cursor: default; /* Cambia el cursor a la flecha estándar */
 }
